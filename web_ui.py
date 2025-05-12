@@ -1,26 +1,28 @@
-from flask import Flask, render_template, request, send_from_directory, jsonify
-import os
-import json
 import base64
-from io import BytesIO
-import matplotlib.pyplot as plt
+import os
+
+from flask import Flask, jsonify, render_template, request, send_from_directory
+
 from audio_metrics import AudioMetricsCalculator
 from visualization import AudioVisualizer
 
 app = Flask(__name__)
 
+
 # Configure templates and static files
-@app.route('/static/<path:path>')
+@app.route("/static/<path:path>")
 def send_static(path):
-    return send_from_directory('static', path)
+    return send_from_directory("static", path)
+
 
 # Create directories if they don't exist
-os.makedirs('templates', exist_ok=True)
-os.makedirs('static', exist_ok=True)
+os.makedirs("templates", exist_ok=True)
+os.makedirs("static", exist_ok=True)
 
 # Create template HTML file
-with open('templates/index.html', 'w') as f:
-    f.write('''
+with open("templates/index.html", "w") as f:
+    f.write(
+        """
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -229,46 +231,56 @@ with open('templates/index.html', 'w') as f:
     </script>
 </body>
 </html>
-    ''')
+    """
+    )
 
 # Create and initialize calculator and visualizer
 calculator = AudioMetricsCalculator()
 visualizer = AudioVisualizer()
 
-@app.route('/')
-def index():
-    return render_template('index.html')
 
-@app.route('/get_audio_files')
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+
+@app.route("/get_audio_files")
 def get_audio_files():
     audio_files = []
-    for filename in os.listdir('stereo_test_calls'):
-        if filename.endswith('.mp3') or filename.endswith('.wav'):
+    for filename in os.listdir("stereo_test_calls"):
+        if filename.endswith(".mp3") or filename.endswith(".wav"):
             audio_files.append(filename)
     return jsonify(audio_files)
 
-@app.route('/audio/<filename>')
+
+@app.route("/audio/<filename>")
 def serve_audio(filename):
     # First check if we have a downsampled version
-    downsampled_path = os.path.join('sampled_test_calls', filename.replace('.mp3', '.wav'))
+    downsampled_path = os.path.join(
+        "sampled_test_calls", filename.replace(".mp3", ".wav")
+    )
     if os.path.exists(downsampled_path):
-        return send_from_directory('sampled_test_calls', filename.replace('.mp3', '.wav'))
+        return send_from_directory(
+            "sampled_test_calls", filename.replace(".mp3", ".wav")
+        )
     else:
-        return send_from_directory('stereo_test_calls', filename)
+        return send_from_directory("stereo_test_calls", filename)
 
-@app.route('/analyze_audio', methods=['POST'])
+
+@app.route("/analyze_audio", methods=["POST"])
 def analyze_audio():
     data = request.get_json()
-    audio_file = data.get('audioFile')
-    
+    audio_file = data.get("audioFile")
+
     # Process the audio file
     metrics = calculator.process_file(audio_file)
-    
+
     # Generate visualizations
-    output_path = metrics['downsampled_path']
+    output_path = metrics["downsampled_path"]
     vis_data = visualizer.generate_web_visualization(metrics, output_path)
-    
+
     return jsonify(vis_data)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     app.run(debug=True, port=5000)

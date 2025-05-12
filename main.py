@@ -75,7 +75,7 @@ def start_web_interface(host="127.0.0.1", port=5000):
 def main():
     """Main entry point"""
     parser = argparse.ArgumentParser(
-        description="Audio Analysis for Customer Service Evaluation"
+        description="Audio Analysis for Jotform AI Agent Calls"
     )
     parser.add_argument(
         "--input-dir",
@@ -97,11 +97,17 @@ def main():
 
     args = parser.parse_args()
 
-    # Process audio files
-    process_audio_files(args.input_dir, args.output_dir)
-
-    # Start web interface if requested
-    if args.web:
+    # Process audio files only if --web is not specified
+    if not args.web:
+        process_audio_files(args.input_dir, args.output_dir)
+    else:
+        # Ensure output directory exists for web UI even if not pre-processing
+        if not os.path.exists(args.output_dir):
+            os.makedirs(args.output_dir)
+        print(f"Output directory for web processing: {os.path.abspath(args.output_dir)}")
+        # Pass input and output dirs to the web app context if needed,
+        # or ensure the web_ui.py uses these defaults or configured paths.
+        # For now, web_ui.py uses its own defaults which match.
         start_web_interface(args.host, args.port)
 
 

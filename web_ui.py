@@ -1,4 +1,3 @@
-import base64
 import os
 
 from flask import Flask, jsonify, render_template, request, send_from_directory
@@ -255,16 +254,22 @@ def get_audio_files():
 
 @app.route("/audio/<filename>")
 def serve_audio(filename):
-    # First check if we have a downsampled version
+    # Construct the expected downsampled filename
+    base, ext = os.path.splitext(filename)
+    downsampled_filename = base + "_downsampled" + ext # Handles both .mp3 and .wav
+
     downsampled_path = os.path.join(
-        "sampled_test_calls", filename.replace(".mp3", ".wav")
+        "sampled_test_calls", downsampled_filename
     )
+    
+    original_path_in_input_dir = os.path.join("stereo_test_calls", filename)
+
     if os.path.exists(downsampled_path):
-        return send_from_directory(
-            "sampled_test_calls", filename.replace(".mp3", ".wav")
-        )
-    else:
+        return send_from_directory("sampled_test_calls", downsampled_filename)
+    elif os.path.exists(original_path_in_input_dir): # Serve original if not yet processed by web UI
         return send_from_directory("stereo_test_calls", filename)
+    else:
+        return "File not found", 404
 
 
 @app.route("/analyze_audio", methods=["POST"])

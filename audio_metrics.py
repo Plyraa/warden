@@ -1,10 +1,9 @@
 import os
-import statistics
 
 import librosa
-import matplotlib.pyplot as plt
 import numpy as np
 import soundfile as sf
+from pydub import AudioSegment # Added for MP3 handling
 
 
 class AudioMetricsCalculator:
@@ -18,29 +17,65 @@ class AudioMetricsCalculator:
             os.makedirs(output_dir)
 
     def downsample_audio(self, input_file, target_sr=16000):
-        """Downsample stereo audio file to target sample rate and return left and right channels"""
+        """Downsample stereo audio file to target sample rate and return left and right channels, preserving format."""
         # Get full path
         input_path = os.path.join(self.input_dir, input_file)
-        output_path = os.path.join(self.output_dir, input_file.replace(".mp3", ".wav"))
+        output_filename = os.path.splitext(input_file)[0] + "_downsampled" + os.path.splitext(input_file)[1]
+        output_path = os.path.join(self.output_dir, output_filename)
 
-        # Load audio
-        audio, sr = librosa.load(input_path, sr=None, mono=False)
+        file_extension = os.path.splitext(input_file)[1].lower()
 
-        # If audio is mono, duplicate to create stereo
-        if len(audio.shape) == 1:
-            audio = np.array([audio, audio])
+        if file_extension == ".mp3":
+            audio_segment = AudioSegment.from_mp3(input_path)
+            # Ensure stereo
+            if audio_segment.channels == 1:
+                audio_segment = audio_segment.set_channels(2)
+            
+            # Resample if necessary
+            if audio_segment.frame_rate != target_sr:
+                audio_segment = audio_segment.set_frame_rate(target_sr)
+            
+            audio_segment.export(output_path, format="mp3")
+            
+            # For consistency with librosa's output, load the downsampled mp3 with librosa
+            # This is for the return value, the file is already saved.
+            audio, sr = librosa.load(output_path, sr=target_sr, mono=False)
+            # Ensure audio is in the expected shape (channels, samples)
+            if len(audio.shape) == 1: # If mono after librosa load (should not happen with pydub export)
+                audio = np.array([audio, audio])
+            elif audio.shape[0] != 2 and audio.shape[1] == 2: # if (samples, channels)
+                 audio = audio.T
 
-        # Resample if necessary
-        if sr != target_sr:
-            audio = librosa.resample(audio, orig_sr=sr, target_sr=target_sr)
 
-        # Save downsampled audio
-        sf.write(output_path, audio.T, target_sr)
+        elif file_extension == ".wav":
+            # Load audio
+            audio, sr = librosa.load(input_path, sr=None, mono=False)
+
+            # If audio is mono, duplicate to create stereo
+            if len(audio.shape) == 1:
+                audio = np.array([audio, audio])
+            # Ensure audio is in the shape (channels, samples) before resample
+            elif audio.shape[0] != 2 and audio.shape[1] == 2: # if (samples, channels)
+                 audio = audio.T
+
+
+            # Resample if necessary
+            if sr != target_sr:
+                # librosa.resample expects (channels, samples) or (samples,)
+                # if audio.shape[0] != 2: # If it's (samples, 2)
+                #     audio = audio.T # Transpose to (2, samples)
+                audio = librosa.resample(audio, orig_sr=sr, target_sr=target_sr)
+
+            # Save downsampled audio
+            # soundfile.write expects (samples, channels)
+            sf.write(output_path, audio.T, target_sr)
+        else:
+            raise ValueError(f"Unsupported file format: {file_extension}")
 
         return audio, target_sr, output_path
 
     def calculate_activity_windows(
-        self, audio, sr, threshold=-35, min_silence_duration=0.2
+        self, audio, sr, threshold=-35, min_silence_duration=0.2, min_activity_duration=0.1  # Added min_activity_duration
     ):
         """
         Calculate activity windows for each channel
@@ -51,6 +86,7 @@ class AudioMetricsCalculator:
 
         # Calculate window parameters
         min_silence_samples = int(min_silence_duration * sr)
+        min_activity_frames = int(min_activity_duration * sr / (0.01 * sr)) # Convert min_activity_duration to frames based on hop_length
 
         # Process each channel
         activity_windows = []
@@ -75,24 +111,43 @@ class AudioMetricsCalculator:
 
             # Convert to time windows
             channel_windows = []
-            current_window = None
+            current_window_start_index = None
 
             for i, active in enumerate(is_active):
-                if active and current_window is None:
-                    # Start new window
-                    current_window = [times[i], None]
+                if active and current_window_start_index is None:
+                    # Start new potential window
+                    current_window_start_index = i
+                elif not active and current_window_start_index is not None:
+                    # Potential end of window
+                    # Check if silence is long enough
+                    # Look back min_silence_samples from current frame i
+                    # hop_length corresponds to one frame in 'is_active' and 'times'
+                    # So, min_silence_frames is min_silence_samples / hop_length
+                    min_silence_frames = int(min_silence_duration / (hop_length / sr))
 
-                elif not active and current_window is not None:
-                    # End current window if silence is long enough
-                    if i > 0 and sum(is_active[i - min_silence_samples : i]) == 0:
-                        current_window[1] = times[i - 1]
-                        channel_windows.append(tuple(current_window))
-                        current_window = None
+                    # Ensure we don't look before the start of the energy array
+                    start_check_index = max(0, i - min_silence_frames)
+                    
+                    # Check if all frames in the silence window are inactive
+                    # And ensure the window is not at the very beginning of the segment
+                    if i > 0 and not np.any(is_active[start_check_index:i]):
+                        start_time = times[current_window_start_index]
+                        end_time = times[i-1] # End time is the previous frame
+                        if (end_time - start_time) >= min_activity_duration:
+                             # Check if the active segment itself was long enough
+                            active_segment_frames = (i-1) - current_window_start_index + 1
+                            if active_segment_frames >= min_activity_frames:
+                                channel_windows.append((start_time, end_time))
+                        current_window_start_index = None
 
-            # Handle case where audio ends while active
-            if current_window is not None:
-                current_window[1] = times[-1]
-                channel_windows.append(tuple(current_window))
+            # Handle case where audio ends while potentially active
+            if current_window_start_index is not None:
+                start_time = times[current_window_start_index]
+                end_time = times[-1]
+                if (end_time - start_time) >= min_activity_duration:
+                    active_segment_frames = len(is_active) - current_window_start_index
+                    if active_segment_frames >= min_activity_frames:
+                        channel_windows.append((start_time, end_time))
 
             activity_windows.append(channel_windows)
 

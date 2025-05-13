@@ -1,0 +1,147 @@
+import os
+import json
+from sqlalchemy import create_engine, Column, Integer, String, Float, Boolean, DateTime
+from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy.sql import func
+import datetime
+
+DATABASE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "database")
+if not os.path.exists(DATABASE_DIR):
+    os.makedirs(DATABASE_DIR)
+
+DATABASE_URL = f"sqlite:///{os.path.join(DATABASE_DIR, 'audio_analysis.db')}"
+
+engine = create_engine(DATABASE_URL)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+
+class AudioAnalysis(Base):
+    __tablename__ = "audio_analyses"
+
+    id = Column(Integer, primary_key=True, index=True)
+    original_filename = Column(String, unique=True, index=True, nullable=False)
+    downsampled_filepath = Column(String, nullable=False)
+    analysis_timestamp = Column(DateTime(timezone=True), server_default=func.now())
+
+    avg_latency_ms = Column(Float)
+    p10_latency_ms = Column(Float)
+    p50_latency_ms = Column(Float)
+    p90_latency_ms = Column(Float)
+
+    ai_interrupting_user = Column(Boolean)
+    user_interrupting_ai = Column(Boolean)
+    talk_ratio = Column(Float)
+    average_pitch_hz = Column(Float)
+    words_per_minute = Column(Float)
+
+    user_speech_segments_json = Column(String)  # JSON string
+    agent_speech_segments_json = Column(String)  # JSON string
+    agent_answer_latencies_ms_json = Column(String)  # JSON string
+
+
+def init_db():
+    Base.metadata.create_all(bind=engine)
+
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+def add_analysis(db_session, metrics_data):
+    user_windows_json = json.dumps(metrics_data.get("user_windows", []))
+    agent_windows_json = json.dumps(metrics_data.get("agent_windows", []))
+    agent_latencies_json = json.dumps(metrics_data.get("agent_answer_latencies", []))
+    latency_metrics = metrics_data.get("latency_metrics", {})
+
+    db_analysis = AudioAnalysis(
+        original_filename=metrics_data["filename"],
+        downsampled_filepath=metrics_data["downsampled_path"],
+        analysis_timestamp=datetime.datetime.now(datetime.timezone.utc),
+        avg_latency_ms=latency_metrics.get("avg_latency"),
+        p10_latency_ms=latency_metrics.get("p10_latency"),
+        p50_latency_ms=latency_metrics.get("p50_latency"),
+        p90_latency_ms=latency_metrics.get("p90_latency"),
+        ai_interrupting_user=metrics_data.get("ai_interrupting_user"),
+        user_interrupting_ai=metrics_data.get("user_interrupting_ai"),
+        talk_ratio=metrics_data.get("talk_ratio"),
+        average_pitch_hz=metrics_data.get("average_pitch"),
+        words_per_minute=metrics_data.get("words_per_minute"),
+        user_speech_segments_json=user_windows_json,
+        agent_speech_segments_json=agent_windows_json,
+        agent_answer_latencies_ms_json=agent_latencies_json,
+    )
+    db_session.add(db_analysis)
+    db_session.commit()
+    db_session.refresh(db_analysis)
+    return db_analysis
+
+
+def get_analysis_by_filename(db_session, filename: str):
+    return (
+        db_session.query(AudioAnalysis)
+        .filter(AudioAnalysis.original_filename == filename)
+        .first()
+    )
+
+
+def recreate_metrics_from_db(db_record: AudioAnalysis):
+    """Converts a DB record back to the metrics dictionary format."""
+    if not db_record:
+        return None
+
+    metrics = {
+        "filename": db_record.original_filename,
+        "downsampled_path": db_record.downsampled_filepath,
+        "latency_metrics": {
+            "avg_latency": db_record.avg_latency_ms,
+            "p10_latency": db_record.p10_latency_ms,
+            "p50_latency": db_record.p50_latency_ms,
+            "p90_latency": db_record.p90_latency_ms,
+        },
+        "agent_answer_latencies": json.loads(
+            db_record.agent_answer_latencies_ms_json or "[]"
+        ),
+        "ai_interrupting_user": db_record.ai_interrupting_user,
+        "user_interrupting_ai": db_record.user_interrupting_ai,
+        "talk_ratio": db_record.talk_ratio,
+        "average_pitch": db_record.average_pitch_hz,
+        "words_per_minute": db_record.words_per_minute,
+        "user_windows": json.loads(db_record.user_speech_segments_json or "[]"),
+        "agent_windows": json.loads(db_record.agent_speech_segments_json or "[]"),
+        "analysis_timestamp": db_record.analysis_timestamp,
+    }
+    return metrics
+
+
+if __name__ == "__main__":
+    # This allows creating the DB schema directly by running this file
+    print("Initializing database...")
+    init_db()
+    print(f"Database initialized at {DATABASE_URL}")
+    # Example usage (optional, for testing)
+    # db = next(get_db())
+    # test_metrics = {
+    #     "filename": "test_file.mp3",
+    #     "downsampled_path": "sampled_test_calls/test_file_downsampled.mp3",
+    #     "latency_metrics": {"avg_latency": 100, "p10_latency": 50, "p50_latency": 100, "p90_latency": 150},
+    #     "agent_answer_latencies": [50,100,150],
+    #     "ai_interrupting_user": False,
+    #     "user_interrupting_ai": True,
+    #     "talk_ratio": 1.5,
+    #     "average_pitch": 220.0,
+    #     "words_per_minute": 150.0,
+    #     "user_windows": [[0.5, 2.0], [3.0, 4.5]],
+    #     "agent_windows": [[2.1, 2.9], [4.6, 5.5]],
+    # }
+    # add_analysis(db, test_metrics)
+    # print("Test analysis added.")
+    # retrieved = get_analysis_by_filename(db, "test_file.mp3")
+    # if retrieved:
+    #     print(f"Retrieved: {retrieved.original_filename}, Timestamp: {retrieved.analysis_timestamp}")
+    #     print(recreate_metrics_from_db(retrieved))
+    # db.close()

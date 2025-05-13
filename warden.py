@@ -3,6 +3,7 @@ import os
 
 from audio_metrics import AudioMetricsCalculator
 from web_ui import app as flask_app
+from database import init_db  # Added to initialize DB on startup
 
 
 def process_audio_files(input_dir="stereo_test_calls", output_dir="sampled_test_calls"):
@@ -29,7 +30,7 @@ def process_audio_files(input_dir="stereo_test_calls", output_dir="sampled_test_
 
     # Process each file
     for i, filename in enumerate(audio_files):
-        print(f"Processing file {i+1}/{len(audio_files)}: {filename}")
+        print(f"Processing file {i + 1}/{len(audio_files)}: {filename}")
 
         # Calculate metrics
         metrics = calculator.process_file(filename)
@@ -104,7 +105,9 @@ def main():
         # Ensure output directory exists for web UI even if not pre-processing
         if not os.path.exists(args.output_dir):
             os.makedirs(args.output_dir)
-        print(f"Output directory for web processing: {os.path.abspath(args.output_dir)}")
+        print(
+            f"Output directory for web processing: {os.path.abspath(args.output_dir)}"
+        )
         # Pass input and output dirs to the web app context if needed,
         # or ensure the web_ui.py uses these defaults or configured paths.
         # For now, web_ui.py uses its own defaults which match.
@@ -112,4 +115,5 @@ def main():
 
 
 if __name__ == "__main__":
+    init_db()  # Initialize the database and create tables if they don't exist
     main()

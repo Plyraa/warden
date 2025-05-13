@@ -5,3 +5,4 @@ numpy==2.2.5
 pydub==0.25.1
 scipy==1.15.3
 soundfile==0.13.1
+SQLAlchemy==2.0.30 # Added for database ORM

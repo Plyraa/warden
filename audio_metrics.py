@@ -1,9 +1,16 @@
 import os
-
 import librosa
 import numpy as np
 import soundfile as sf
-from pydub import AudioSegment # Added for MP3 handling
+from pydub import AudioSegment  # Added for MP3 handling
+
+# Database imports
+from database import (
+    get_db,
+    add_analysis,
+    get_analysis_by_filename,
+    recreate_metrics_from_db,
+)
 
 
 class AudioMetricsCalculator:
@@ -18,11 +25,27 @@ class AudioMetricsCalculator:
 
     def downsample_audio(self, input_file, target_sr=16000):
         """Downsample stereo audio file to target sample rate and return left and right channels, preserving format."""
-        # Get full path
         input_path = os.path.join(self.input_dir, input_file)
-        output_filename = os.path.splitext(input_file)[0] + "_downsampled" + os.path.splitext(input_file)[1]
+        output_filename = (
+            os.path.splitext(input_file)[0]
+            + "_downsampled"
+            + os.path.splitext(input_file)[1]
+        )
         output_path = os.path.join(self.output_dir, output_filename)
 
+        # Check if downsampled file already exists
+        if os.path.exists(output_path):
+            print(f"Found existing downsampled file: {output_path}")
+            # Ensure consistent return type with processing case
+            audio, sr = librosa.load(output_path, sr=target_sr, mono=False)
+            # Ensure audio is in the expected shape (channels, samples)
+            if len(audio.shape) == 1:
+                audio = np.array([audio, audio])
+            elif audio.shape[0] != 2 and audio.shape[1] == 2:  # if (samples, channels)
+                audio = audio.T
+            return audio, sr, output_path
+
+        print(f"Downsampling {input_file} to {output_path}")
         file_extension = os.path.splitext(input_file)[1].lower()
 
         if file_extension == ".mp3":
@@ -30,22 +53,23 @@ class AudioMetricsCalculator:
             # Ensure stereo
             if audio_segment.channels == 1:
                 audio_segment = audio_segment.set_channels(2)
-            
+
             # Resample if necessary
             if audio_segment.frame_rate != target_sr:
                 audio_segment = audio_segment.set_frame_rate(target_sr)
-            
+
             audio_segment.export(output_path, format="mp3")
-            
+
             # For consistency with librosa's output, load the downsampled mp3 with librosa
             # This is for the return value, the file is already saved.
             audio, sr = librosa.load(output_path, sr=target_sr, mono=False)
             # Ensure audio is in the expected shape (channels, samples)
-            if len(audio.shape) == 1: # If mono after librosa load (should not happen with pydub export)
+            if (
+                len(audio.shape) == 1
+            ):  # If mono after librosa load (should not happen with pydub export)
                 audio = np.array([audio, audio])
-            elif audio.shape[0] != 2 and audio.shape[1] == 2: # if (samples, channels)
-                 audio = audio.T
-
+            elif audio.shape[0] != 2 and audio.shape[1] == 2:  # if (samples, channels)
+                audio = audio.T
 
         elif file_extension == ".wav":
             # Load audio
@@ -55,9 +79,8 @@ class AudioMetricsCalculator:
             if len(audio.shape) == 1:
                 audio = np.array([audio, audio])
             # Ensure audio is in the shape (channels, samples) before resample
-            elif audio.shape[0] != 2 and audio.shape[1] == 2: # if (samples, channels)
-                 audio = audio.T
-
+            elif audio.shape[0] != 2 and audio.shape[1] == 2:  # if (samples, channels)
+                audio = audio.T
 
             # Resample if necessary
             if sr != target_sr:
@@ -75,7 +98,12 @@ class AudioMetricsCalculator:
         return audio, target_sr, output_path
 
     def calculate_activity_windows(
-        self, audio, sr, threshold=-35, min_silence_duration=0.2, min_activity_duration=0.1  # Added min_activity_duration
+        self,
+        audio,
+        sr,
+        threshold=-35,
+        min_silence_duration=0.2,
+        min_activity_duration=0.1,
     ):
         """
         Calculate activity windows for each channel
@@ -85,8 +113,10 @@ class AudioMetricsCalculator:
         amplitude_threshold = 10 ** (threshold / 20)
 
         # Calculate window parameters
-        min_silence_samples = int(min_silence_duration * sr)
-        min_activity_frames = int(min_activity_duration * sr / (0.01 * sr)) # Convert min_activity_duration to frames based on hop_length
+        # min_silence_samples = int(min_silence_duration * sr) # This variable was unused. min_silence_duration is used directly.
+        min_activity_frames = int(
+            min_activity_duration * sr / (0.01 * sr)
+        )  # Convert min_activity_duration to frames based on hop_length
 
         # Process each channel
         activity_windows = []
@@ -127,15 +157,17 @@ class AudioMetricsCalculator:
 
                     # Ensure we don't look before the start of the energy array
                     start_check_index = max(0, i - min_silence_frames)
-                    
+
                     # Check if all frames in the silence window are inactive
                     # And ensure the window is not at the very beginning of the segment
                     if i > 0 and not np.any(is_active[start_check_index:i]):
                         start_time = times[current_window_start_index]
-                        end_time = times[i-1] # End time is the previous frame
+                        end_time = times[i - 1]  # End time is the previous frame
                         if (end_time - start_time) >= min_activity_duration:
-                             # Check if the active segment itself was long enough
-                            active_segment_frames = (i-1) - current_window_start_index + 1
+                            # Check if the active segment itself was long enough
+                            active_segment_frames = (
+                                (i - 1) - current_window_start_index + 1
+                            )
                             if active_segment_frames >= min_activity_frames:
                                 channel_windows.append((start_time, end_time))
                         current_window_start_index = None
@@ -203,7 +235,10 @@ class AudioMetricsCalculator:
             user_start, user_end = user_window
 
             # Check if any agent window overlaps with user window
-            for agent_start, agent_end in agent_windows:
+            for (
+                agent_start,
+                _agent_end,
+            ) in agent_windows:  # Use _agent_end as it's not used
                 # Agent started speaking while user was speaking
                 if agent_start > user_start and agent_start < user_end:
                     return True
@@ -216,7 +251,7 @@ class AudioMetricsCalculator:
             agent_start, agent_end = agent_window
 
             # Check if any user window overlaps with agent window
-            for user_start, user_end in user_windows:
+            for user_start, _user_end in user_windows:  # Use _user_end as it's not used
                 # User started speaking while agent was speaking
                 if user_start > agent_start and user_start < agent_end:
                     return True
@@ -301,43 +336,82 @@ class AudioMetricsCalculator:
             return 0
 
     def process_file(self, filename):
-        """Process a single audio file and calculate all metrics"""
-        # Downsample audio file
-        audio, sr, output_path = self.downsample_audio(filename)
+        """Process a single audio file and calculate all metrics.
+        Checks database first, if found, returns stored metrics.
+        Otherwise, processes and stores new metrics."""
 
-        # Get activity windows for both channels
-        activity_windows = self.calculate_activity_windows(audio, sr)
-
-        # Right channel (index 1) is AI agent, Left channel (index 0) is user
-        user_windows = activity_windows[0]  # Left channel
-        agent_windows = activity_windows[1]  # Right channel
-
-        # Calculate metrics
-        metrics = {
-            "filename": filename,
-            "downsampled_path": output_path,
-            "latency_metrics": self.calculate_average_latency(
-                user_windows, agent_windows
-            ),
-            "agent_answer_latencies": [
-                lat * 1000
-                for lat in self.calculate_agent_answer_latency(
-                    user_windows, agent_windows
+        db_session = next(get_db())  # Get a database session
+        try:
+            existing_analysis_db = get_analysis_by_filename(db_session, filename)
+            if existing_analysis_db:
+                print(
+                    f"Found existing analysis for {filename} in database. Returning stored data."
                 )
-            ],  # ms
-            "ai_interrupting_user": self.detect_ai_interrupting_user(
-                user_windows, agent_windows
-            ),
-            "user_interrupting_ai": self.detect_user_interrupting_ai(
-                user_windows, agent_windows
-            ),
-            "talk_ratio": self.calculate_talk_ratio(user_windows, agent_windows),
-            "average_pitch": self.calculate_average_pitch(audio, sr),
-            "words_per_minute": self.calculate_words_per_minute(
-                audio, sr, agent_windows
-            ),
-            "user_windows": user_windows,
-            "agent_windows": agent_windows,
-        }
+                # Need to ensure the downsampled file actually exists if we return stored data,
+                # especially if the sampled_test_calls folder might be cleared.
+                # For now, we assume downsampled_path from DB is valid.
+                # If not, we might need to re-trigger downsampling or ensure it's present.
+                # The current downsample_audio checks for existing files, so it's somewhat robust.
 
-        return metrics
+                # We also need to ensure the audio data itself is loaded if other parts of the app
+                # expect it directly from process_file, though currently process_file returns metrics dict.
+                # The visualizer re-loads audio from downsampled_path, so that should be fine.
+
+                # Recreate the metrics dictionary from the database record
+                metrics = recreate_metrics_from_db(existing_analysis_db)
+                # Ensure the downsampled audio exists for visualization if we are skipping full processing
+                # The downsample_audio method itself checks and can return existing, so we can call it
+                # to ensure the file path is valid and audio is loadable for visualization later.
+                _audio, _sr, _output_path = self.downsample_audio(
+                    filename
+                )  # Ensures file exists
+                metrics["downsampled_path"] = (
+                    _output_path  # Update with potentially new path if it was re-created
+                )
+                return metrics
+
+            print(f"No existing analysis for {filename} in database. Processing anew.")
+            # Downsample audio file (this also handles existing downsampled files)
+            audio, sr, output_path = self.downsample_audio(filename)
+
+            # Get activity windows for both channels
+            activity_windows = self.calculate_activity_windows(audio, sr)
+
+            # Right channel (index 1) is AI agent, Left channel (index 0) is user
+            user_windows = activity_windows[0]  # Left channel
+            agent_windows = activity_windows[1]  # Right channel
+
+            # Calculate metrics
+            metrics = {
+                "filename": filename,
+                "downsampled_path": output_path,
+                "latency_metrics": self.calculate_average_latency(
+                    user_windows, agent_windows
+                ),
+                "agent_answer_latencies": [
+                    lat * 1000
+                    for lat in self.calculate_agent_answer_latency(
+                        user_windows, agent_windows
+                    )
+                ],  # ms
+                "ai_interrupting_user": self.detect_ai_interrupting_user(
+                    user_windows, agent_windows
+                ),
+                "user_interrupting_ai": self.detect_user_interrupting_ai(
+                    user_windows, agent_windows
+                ),
+                "talk_ratio": self.calculate_talk_ratio(user_windows, agent_windows),
+                "average_pitch": self.calculate_average_pitch(audio, sr),
+                "words_per_minute": self.calculate_words_per_minute(
+                    audio, sr, agent_windows
+                ),
+                "user_windows": user_windows,
+                "agent_windows": agent_windows,
+            }
+
+            # Add new analysis to database
+            add_analysis(db_session, metrics)
+            print(f"Saved new analysis for {filename} to database.")
+            return metrics
+        finally:
+            db_session.close()

@@ -1,5 +1,4 @@
 import base64
-import os
 from io import BytesIO
 
 import librosa

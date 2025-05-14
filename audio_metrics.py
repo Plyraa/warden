@@ -3,6 +3,14 @@ import librosa
 import numpy as np
 import soundfile as sf
 from pydub import AudioSegment  # Added for MP3 handling
+import tempfile
+from pathlib import Path
+import concurrent.futures
+from dotenv import load_dotenv  # Added for .env file support
+import subprocess  # Added for direct ffmpeg calls
+
+# ElevenLabs
+from elevenlabs.client import ElevenLabs
 
 # Database imports
 from database import (
@@ -12,12 +20,25 @@ from database import (
     recreate_metrics_from_db,
 )
 
+# Load environment variables from .env file
+load_dotenv()
+
 
 class AudioMetricsCalculator:
     def __init__(self, input_dir="stereo_test_calls", output_dir="sampled_test_calls"):
         """Initialize the calculator with input and output directories"""
         self.input_dir = input_dir
         self.output_dir = output_dir
+        self.elevenlabs_client = None
+        # ELEVENLABS_API_KEY is now loaded from .env by load_dotenv()
+        # os.getenv will retrieve it if it was successfully loaded into the environment
+        elevenlabs_api_key = os.getenv("ELEVENLABS_API_KEY")
+        if elevenlabs_api_key:
+            self.elevenlabs_client = ElevenLabs(api_key=elevenlabs_api_key)
+        else:
+            print(
+                "WARNING: ELEVENLABS_API_KEY not found in .env file or environment. Transcription will be skipped."
+            )
 
         # Create output directory if it doesn't exist
         if not os.path.exists(output_dir):
@@ -96,6 +117,152 @@ class AudioMetricsCalculator:
             raise ValueError(f"Unsupported file format: {file_extension}")
 
         return audio, target_sr, output_path
+        
+    def _split_stereo_audio(self, stereo_audio_path: str, temp_dir: str):
+        """Splits a stereo audio file into two mono files (customer and agent) using subprocess.run with pan filter."""
+        original_path = Path(stereo_audio_path)
+        base_name = original_path.stem
+        original_extension = original_path.suffix  # e.g., .mp3 or .wav
+
+        # Output files will have the same extension as the input
+        customer_path = Path(temp_dir) / f"{base_name}_customer{original_extension}"
+        agent_path = Path(temp_dir) / f"{base_name}_agent{original_extension}"
+
+        # Use pan filter to extract the left channel (customer)
+        customer_command = [
+            "ffmpeg",
+            "-y",  # Overwrite output files without asking
+            "-i", str(stereo_audio_path),
+            "-filter_complex", "pan=mono|c0=c0",  # Extract left channel
+            "-ac", "1",  # Ensure mono output
+            str(customer_path)
+        ]
+        
+        # Use pan filter to extract the right channel (agent)
+        agent_command = [
+            "ffmpeg",
+            "-y",  # Overwrite output files without asking
+            "-i", str(stereo_audio_path),
+            "-filter_complex", "pan=mono|c0=c1",  # Extract right channel
+            "-ac", "1",  # Ensure mono output
+            str(agent_path)
+        ]
+
+        try:
+            # Process left channel (customer)
+            # print(f"Executing ffmpeg command: {' '.join(customer_command)}") # For debugging
+            subprocess.run(customer_command, capture_output=True, text=True, check=True)
+            
+            # Process right channel (agent)
+            # print(f"Executing ffmpeg command: {' '.join(agent_command)}") # For debugging
+            subprocess.run(agent_command, capture_output=True, text=True, check=True)
+            
+            return str(customer_path), str(agent_path)
+        except subprocess.CalledProcessError as e:
+            print(
+                f"Error splitting audio channels for {stereo_audio_path} using subprocess:"
+            )
+            print(f"Command: {' '.join(e.cmd)}")
+            print(f"Return code: {e.returncode}")
+            print(f"Stderr: {e.stderr}")
+            print(f"Stdout: {e.stdout}")
+            return None, None
+        except FileNotFoundError:
+            print(
+                "Error: ffmpeg command not found. Please ensure ffmpeg is installed and in your system's PATH."
+            )
+            return None, None
+
+    def _transcribe_channel(self, audio_path: str, speaker_label: str):
+        """Transcribes a single mono audio file using ElevenLabs Scribe."""
+        if not self.elevenlabs_client:
+            return []  # Return empty list if client not initialized
+
+        try:
+            with open(audio_path, "rb") as f:
+                response = self.elevenlabs_client.speech_to_text.convert(
+                    file=f,
+                    model_id="scribe_v1",  # Or your preferred model
+                    diarize=False,
+                    num_speakers=1,
+                    timestamps_granularity="word",
+                    tag_audio_events=False,  # Set to True if you need event tags
+                )
+
+            words = (
+                response.words if hasattr(response, "words") and response.words else []
+            )
+            # Attach our own speaker label
+            for word_info in words:
+                word_info["speaker"] = speaker_label
+            return words
+        except Exception as e:
+            print(f"Error during transcription for {audio_path} ({speaker_label}): {e}")
+            return []
+
+    def _merge_and_format_transcript(self, words_customer, words_agent):
+        """Merges word lists from customer and agent, sorts them, and formats into a dialog."""
+        all_words = sorted(words_customer + words_agent, key=lambda w: w["start"])
+
+        dialog_parts = []
+        current_buffer, current_speaker = [], None
+        for word_info in all_words:
+            word_text = word_info["text"]
+            speaker = word_info["speaker"]
+            if speaker != current_speaker:
+                if current_buffer:
+                    dialog_parts.append(
+                        f"{current_speaker.upper()}: {' '.join(current_buffer)}"
+                    )
+                current_buffer, current_speaker = [word_text], speaker
+            else:
+                current_buffer.append(word_text)
+
+        if current_buffer:  # Append the last utterance
+            dialog_parts.append(
+                f"{current_speaker.upper()}: {' '.join(current_buffer)}"
+            )
+
+        full_dialog = "\\n".join(dialog_parts)
+        return {"words": all_words, "dialog": full_dialog}
+
+    def _get_transcript_for_file(self, original_stereo_filepath: str):
+        """Gets transcript for a stereo audio file."""
+        if not self.elevenlabs_client:
+            print(
+                f"Skipping transcription for {original_stereo_filepath} as ElevenLabs client is not initialized."
+            )
+            return None
+
+        with tempfile.TemporaryDirectory() as td:
+            customer_mono_path, agent_mono_path = self._split_stereo_audio(
+                original_stereo_filepath, td
+            )
+
+            if not customer_mono_path or not agent_mono_path:
+                print(
+                    f"Failed to split channels for {original_stereo_filepath}, skipping transcription."
+                )
+                return None
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                future_customer = executor.submit(
+                    self._transcribe_channel, customer_mono_path, "customer"
+                )
+                future_agent = executor.submit(
+                    self._transcribe_channel, agent_mono_path, "ai_agent"
+                )
+
+                words_customer = future_customer.result()
+                words_agent = future_agent.result()
+
+            if not words_customer and not words_agent:
+                print(
+                    f"Transcription failed for both channels of {original_stereo_filepath}."
+                )
+                return None
+
+            return self._merge_and_format_transcript(words_customer, words_agent)
 
     def calculate_activity_windows(
         self,
@@ -347,27 +514,30 @@ class AudioMetricsCalculator:
                 print(
                     f"Found existing analysis for {filename} in database. Returning stored data."
                 )
-                # Need to ensure the downsampled file actually exists if we return stored data,
-                # especially if the sampled_test_calls folder might be cleared.
-                # For now, we assume downsampled_path from DB is valid.
-                # If not, we might need to re-trigger downsampling or ensure it's present.
-                # The current downsample_audio checks for existing files, so it's somewhat robust.
-
-                # We also need to ensure the audio data itself is loaded if other parts of the app
-                # expect it directly from process_file, though currently process_file returns metrics dict.
-                # The visualizer re-loads audio from downsampled_path, so that should be fine.
-
-                # Recreate the metrics dictionary from the database record
                 metrics = recreate_metrics_from_db(existing_analysis_db)
-                # Ensure the downsampled audio exists for visualization if we are skipping full processing
-                # The downsample_audio method itself checks and can return existing, so we can call it
-                # to ensure the file path is valid and audio is loadable for visualization later.
-                _audio, _sr, _output_path = self.downsample_audio(
-                    filename
-                )  # Ensures file exists
-                metrics["downsampled_path"] = (
-                    _output_path  # Update with potentially new path if it was re-created
-                )
+                _audio, _sr, _output_path = self.downsample_audio(filename)
+                metrics["downsampled_path"] = _output_path
+                # If transcript is missing from old record, try to generate it now
+                if not metrics.get("transcript_data") and self.elevenlabs_client:
+                    print(
+                        f"Transcript data missing for {filename}, attempting to generate."
+                    )
+                    original_file_path = os.path.join(self.input_dir, filename)
+                    transcript_data = self._get_transcript_for_file(original_file_path)
+                    if transcript_data:
+                        metrics["transcript_data"] = transcript_data
+                        # NOTE: This only updates the metrics dictionary returned.
+                        # To persist this newly generated transcript for an existing record,
+                        # an explicit database update operation would be needed here.
+                        # For simplicity, this example assumes that if a transcript is missing,
+                        # it will be generated and included in the current operation's output,
+                        # but a full re-processing or a dedicated update mechanism
+                        # would be required to save it back to the existing DB record.
+                        print(
+                            f"Generated transcript for {filename} (was missing from DB)."
+                        )
+                    else:
+                        print(f"Failed to generate missing transcript for {filename}.")
                 return metrics
 
             print(f"No existing analysis for {filename} in database. Processing anew.")
@@ -380,6 +550,21 @@ class AudioMetricsCalculator:
             # Right channel (index 1) is AI agent, Left channel (index 0) is user
             user_windows = activity_windows[0]  # Left channel
             agent_windows = activity_windows[1]  # Right channel
+
+            # Get transcript
+            transcript_data = None
+            if self.elevenlabs_client:
+                original_file_path = os.path.join(self.input_dir, filename)
+                print(f"Attempting transcription for {original_file_path}...")
+                transcript_data = self._get_transcript_for_file(original_file_path)
+                if transcript_data:
+                    print(f"Successfully transcribed {filename}.")
+                else:
+                    print(f"Transcription failed or yielded no data for {filename}.")
+            else:
+                print(
+                    f"Skipping transcription for {filename} (ElevenLabs client not configured)."
+                )
 
             # Calculate metrics
             metrics = {
@@ -407,6 +592,7 @@ class AudioMetricsCalculator:
                 ),
                 "user_windows": user_windows,
                 "agent_windows": agent_windows,
+                "transcript_data": transcript_data,  # Add transcript data here
             }
 
             # Add new analysis to database

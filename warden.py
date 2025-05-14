@@ -64,6 +64,13 @@ def print_metrics_summary(metrics):
     # Count of speech segments
     print(f"User Speech Segments: {len(metrics['user_windows'])}")
     print(f"Agent Speech Segments: {len(metrics['agent_windows'])}")
+
+    # Transcript
+    if metrics.get("transcript_data") and metrics["transcript_data"].get("dialog"):
+        print("\nTranscript:")
+        print(metrics["transcript_data"]["dialog"])
+    else:
+        print("\nTranscript: Not available.")
     print("-" * 50)
 
 

@@ -1,7 +1,7 @@
 import os
 import json
-from sqlalchemy import create_engine, Column, Integer, String, Float, Boolean, DateTime
-from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy import create_engine, Column, Integer, String, Float, Boolean, DateTime, ForeignKey, Text
+from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from sqlalchemy.sql import func
 import datetime
 
@@ -39,6 +39,25 @@ class AudioAnalysis(Base):
     agent_speech_segments_json = Column(String)  # JSON string
     agent_answer_latencies_ms_json = Column(String)  # JSON string
 
+    # Relationship to Transcript
+    transcript_id = Column(Integer, ForeignKey("transcripts.id"))
+    transcript = relationship("Transcript", back_populates="audio_analysis")
+
+
+class Transcript(Base):
+    __tablename__ = "transcripts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    original_filename = Column(String, unique=True, index=True, nullable=False)
+    transcript_text = Column(Text)  # Full dialog
+    word_level_transcript_json = Column(String)  # JSON string of word-level data
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Relationship back to AudioAnalysis (one-to-one)
+    audio_analysis = relationship(
+        "AudioAnalysis", back_populates="transcript", uselist=False
+    )
+
 
 def init_db():
     Base.metadata.create_all(bind=engine)
@@ -57,6 +76,7 @@ def add_analysis(db_session, metrics_data):
     agent_windows_json = json.dumps(metrics_data.get("agent_windows", []))
     agent_latencies_json = json.dumps(metrics_data.get("agent_answer_latencies", []))
     latency_metrics = metrics_data.get("latency_metrics", {})
+    transcript_data = metrics_data.get("transcript_data")
 
     db_analysis = AudioAnalysis(
         original_filename=metrics_data["filename"],
@@ -75,6 +95,16 @@ def add_analysis(db_session, metrics_data):
         agent_speech_segments_json=agent_windows_json,
         agent_answer_latencies_ms_json=agent_latencies_json,
     )
+
+    if transcript_data:
+        db_transcript = Transcript(
+            original_filename=metrics_data["filename"],
+            transcript_text=transcript_data["dialog"],
+            word_level_transcript_json=json.dumps(transcript_data["words"]),
+        )
+        db_analysis.transcript = db_transcript
+        # db_session.add(db_transcript) # Handled by relationship cascade
+
     db_session.add(db_analysis)
     db_session.commit()
     db_session.refresh(db_analysis)
@@ -115,6 +145,15 @@ def recreate_metrics_from_db(db_record: AudioAnalysis):
         "agent_windows": json.loads(db_record.agent_speech_segments_json or "[]"),
         "analysis_timestamp": db_record.analysis_timestamp,
     }
+
+    if db_record.transcript:
+        metrics["transcript_data"] = {
+            "dialog": db_record.transcript.transcript_text,
+            "words": json.loads(db_record.transcript.word_level_transcript_json or "[]"),
+            "transcript_id": db_record.transcript.id,
+        }
+    else:
+        metrics["transcript_data"] = None
     return metrics
 
 

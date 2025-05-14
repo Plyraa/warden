@@ -270,6 +270,11 @@ class AudioVisualizer:
         agent_windows = metrics["agent_windows"]
         filename = metrics["filename"]
         latencies = metrics["agent_answer_latencies"]
+        
+        transcript_data = metrics.get("transcript_data")
+        transcript_dialog = "Transcript not available."
+        if transcript_data and transcript_data.get("dialog"):
+            transcript_dialog = transcript_data["dialog"]
 
         # Load audio to get duration
         y, sr = librosa.load(audio_path, sr=None, mono=False)
@@ -294,4 +299,5 @@ class AudioVisualizer:
             "latency_hist_img": latency_hist_img,
             "metrics_table": metrics_table,
             "filename": filename,
+            "transcript_dialog": transcript_dialog,  # Added transcript dialog
         }

@@ -6,3 +6,6 @@ pydub==0.25.1
 scipy==1.15.3
 soundfile==0.13.1
 SQLAlchemy==2.0.30 # Added for database ORM
+elevenlabs==1.58.1 # Added for ElevenLabs Scribe
+ffmpeg-python==0.2.0 # Added for audio channel splitting
+python-dotenv==1.1.0 # Added for .env file support

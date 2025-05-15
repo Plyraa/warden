@@ -117,7 +117,7 @@ class AudioMetricsCalculator:
             raise ValueError(f"Unsupported file format: {file_extension}")
 
         return audio, target_sr, output_path
-        
+
     def _split_stereo_audio(self, stereo_audio_path: str, temp_dir: str):
         """Splits a stereo audio file into two mono files (customer and agent) using subprocess.run with pan filter."""
         original_path = Path(stereo_audio_path)
@@ -132,31 +132,37 @@ class AudioMetricsCalculator:
         customer_command = [
             "ffmpeg",
             "-y",  # Overwrite output files without asking
-            "-i", str(stereo_audio_path),
-            "-filter_complex", "pan=mono|c0=c0",  # Extract left channel
-            "-ac", "1",  # Ensure mono output
-            str(customer_path)
+            "-i",
+            str(stereo_audio_path),
+            "-filter_complex",
+            "pan=mono|c0=c0",  # Extract left channel
+            "-ac",
+            "1",  # Ensure mono output
+            str(customer_path),
         ]
-        
+
         # Use pan filter to extract the right channel (agent)
         agent_command = [
             "ffmpeg",
             "-y",  # Overwrite output files without asking
-            "-i", str(stereo_audio_path),
-            "-filter_complex", "pan=mono|c0=c1",  # Extract right channel
-            "-ac", "1",  # Ensure mono output
-            str(agent_path)
+            "-i",
+            str(stereo_audio_path),
+            "-filter_complex",
+            "pan=mono|c0=c1",  # Extract right channel
+            "-ac",
+            "1",  # Ensure mono output
+            str(agent_path),
         ]
 
         try:
             # Process left channel (customer)
             # print(f"Executing ffmpeg command: {' '.join(customer_command)}") # For debugging
             subprocess.run(customer_command, capture_output=True, text=True, check=True)
-            
+
             # Process right channel (agent)
             # print(f"Executing ffmpeg command: {' '.join(agent_command)}") # For debugging
             subprocess.run(agent_command, capture_output=True, text=True, check=True)
-            
+
             return str(customer_path), str(agent_path)
         except subprocess.CalledProcessError as e:
             print(
@@ -188,35 +194,84 @@ class AudioMetricsCalculator:
                     timestamps_granularity="word",
                     tag_audio_events=False,  # Set to True if you need event tags
                 )
-
-            words = (
-                response.words if hasattr(response, "words") and response.words else []
+            print(
+                f"response from ElevenLabs for {audio_path} ({speaker_label}): {response}"
             )
-            # Attach our own speaker label
-            for word_info in words:
-                word_info["speaker"] = speaker_label
+            # Convert response words to dictionaries that can be modified
+            words = []
+            if hasattr(response, "words") and response.words:
+                for word_obj in response.words:
+                    # Skip spaces and non-word elements to focus on actual speech
+                    if hasattr(word_obj, "type") and word_obj.type != "word":
+                        continue
+                        
+                    # Create a dictionary with the word data and speaker label
+                    word_dict = {
+                        "text": word_obj.text,
+                        "start": word_obj.start,
+                        "end": word_obj.end,
+                        "speaker": speaker_label,
+                        # Store additional data from ElevenLabs response
+                        "logprob": getattr(word_obj, "logprob", None),
+                        "type": getattr(word_obj, "type", "word"),
+                        "speaker_id": getattr(word_obj, "speaker_id", None),
+                    }
+                    words.append(word_dict)
+                print(f"words: {words}")
             return words
+
         except Exception as e:
             print(f"Error during transcription for {audio_path} ({speaker_label}): {e}")
             return []
 
     def _merge_and_format_transcript(self, words_customer, words_agent):
-        """Merges word lists from customer and agent, sorts them, and formats into a dialog."""
+        """Merges word lists from customer and agent, sorts them, and formats into a dialog.
+        Also detects and marks overlapping speech segments."""
         all_words = sorted(words_customer + words_agent, key=lambda w: w["start"])
-
+        
+        # Identify overlapping speech
+        for word in all_words:
+            word["is_overlap"] = False  # Default: no overlap
+        
+        # Check each word against words from the other speaker
+        for word in all_words:
+            word_start = word["start"]
+            word_end = word["end"]
+            speaker = word["speaker"]
+            
+            # Look for overlaps with words from other speakers
+            for other_word in all_words:
+                if other_word["speaker"] != speaker:  # Different speaker
+                    other_start = other_word["start"]
+                    other_end = other_word["end"]
+                    
+                    # Check for overlap (any partial overlap counts)
+                    if (word_start < other_end and word_end > other_start):
+                        word["is_overlap"] = True
+                        other_word["is_overlap"] = True
+        
+        # Build dialog with improved formatting
         dialog_parts = []
         current_buffer, current_speaker = [], None
+        
         for word_info in all_words:
             word_text = word_info["text"]
             speaker = word_info["speaker"]
+            is_overlap = word_info.get("is_overlap", False)
+            
+            # Add overlap indicator to words that overlap
+            marked_text = word_text
+            if is_overlap:
+                marked_text = f"{word_text}[OVERLAP]"
+            
             if speaker != current_speaker:
                 if current_buffer:
                     dialog_parts.append(
                         f"{current_speaker.upper()}: {' '.join(current_buffer)}"
                     )
-                current_buffer, current_speaker = [word_text], speaker
+                current_buffer, current_speaker = [marked_text], speaker
             else:
-                current_buffer.append(word_text)
+                current_buffer.append(marked_text)
 
         if current_buffer:  # Append the last utterance
             dialog_parts.append(
@@ -224,7 +279,14 @@ class AudioMetricsCalculator:
             )
 
         full_dialog = "\\n".join(dialog_parts)
-        return {"words": all_words, "dialog": full_dialog}
+        
+        # Create an extended result with overlap information
+        return {
+            "words": all_words,
+            "dialog": full_dialog,
+            "has_overlaps": any(word.get("is_overlap", False) for word in all_words),
+            "overlap_count": sum(1 for word in all_words if word.get("is_overlap", False))
+        }
 
     def _get_transcript_for_file(self, original_stereo_filepath: str):
         """Gets transcript for a stereo audio file."""
@@ -526,13 +588,6 @@ class AudioMetricsCalculator:
                     transcript_data = self._get_transcript_for_file(original_file_path)
                     if transcript_data:
                         metrics["transcript_data"] = transcript_data
-                        # NOTE: This only updates the metrics dictionary returned.
-                        # To persist this newly generated transcript for an existing record,
-                        # an explicit database update operation would be needed here.
-                        # For simplicity, this example assumes that if a transcript is missing,
-                        # it will be generated and included in the current operation's output,
-                        # but a full re-processing or a dedicated update mechanism
-                        # would be required to save it back to the existing DB record.
                         print(
                             f"Generated transcript for {filename} (was missing from DB)."
                         )
@@ -551,7 +606,7 @@ class AudioMetricsCalculator:
             user_windows = activity_windows[0]  # Left channel
             agent_windows = activity_windows[1]  # Right channel
 
-            # Get transcript
+            # Get transcript with improved overlap handling
             transcript_data = None
             if self.elevenlabs_client:
                 original_file_path = os.path.join(self.input_dir, filename)
@@ -559,6 +614,7 @@ class AudioMetricsCalculator:
                 transcript_data = self._get_transcript_for_file(original_file_path)
                 if transcript_data:
                     print(f"Successfully transcribed {filename}.")
+                    print(f"Found {transcript_data.get('overlap_count', 0)} overlapping speech segments.")
                 else:
                     print(f"Transcription failed or yielded no data for {filename}.")
             else:
@@ -592,12 +648,12 @@ class AudioMetricsCalculator:
                 ),
                 "user_windows": user_windows,
                 "agent_windows": agent_windows,
-                "transcript_data": transcript_data,  # Add transcript data here
+                "transcript_data": transcript_data,  # Add enhanced transcript data here
             }
 
             # Add new analysis to database
             add_analysis(db_session, metrics)
-            print(f"Saved new analysis for {filename} to database.")
+            print(f"Saved new analysis for {filename} to database with improved transcript handling.")
             return metrics
         finally:
             db_session.close()

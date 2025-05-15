@@ -51,6 +51,9 @@ class Transcript(Base):
     original_filename = Column(String, unique=True, index=True, nullable=False)
     transcript_text = Column(Text)  # Full dialog
     word_level_transcript_json = Column(String)  # JSON string of word-level data
+    has_overlaps = Column(Boolean, default=False)  # Flag for speech overlaps
+    overlap_count = Column(Integer, default=0)  # Count of overlapping words
+    transcript_metadata_json = Column(String, nullable=True)  # For additional ElevenLabs data
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relationship back to AudioAnalysis (one-to-one)
@@ -97,10 +100,18 @@ def add_analysis(db_session, metrics_data):
     )
 
     if transcript_data:
+        # Create transcript record with extended information
         db_transcript = Transcript(
             original_filename=metrics_data["filename"],
             transcript_text=transcript_data["dialog"],
             word_level_transcript_json=json.dumps(transcript_data["words"]),
+            has_overlaps=transcript_data.get("has_overlaps", False),
+            overlap_count=transcript_data.get("overlap_count", 0),
+            # Store any additional metadata from the transcript
+            transcript_metadata_json=json.dumps({
+                k: v for k, v in transcript_data.items() 
+                if k not in ["words", "dialog", "has_overlaps", "overlap_count"]
+            })
         )
         db_analysis.transcript = db_transcript
         # db_session.add(db_transcript) # Handled by relationship cascade
@@ -147,11 +158,24 @@ def recreate_metrics_from_db(db_record: AudioAnalysis):
     }
 
     if db_record.transcript:
-        metrics["transcript_data"] = {
+        # Include all transcript data including overlap information
+        transcript_data = {
             "dialog": db_record.transcript.transcript_text,
             "words": json.loads(db_record.transcript.word_level_transcript_json or "[]"),
+            "has_overlaps": db_record.transcript.has_overlaps,
+            "overlap_count": db_record.transcript.overlap_count,
             "transcript_id": db_record.transcript.id,
         }
+        
+        # Add any additional metadata stored in transcript_metadata_json
+        if db_record.transcript.transcript_metadata_json:
+            try:
+                additional_metadata = json.loads(db_record.transcript.transcript_metadata_json)
+                transcript_data.update(additional_metadata)
+            except json.JSONDecodeError:
+                pass
+                
+        metrics["transcript_data"] = transcript_data
     else:
         metrics["transcript_data"] = None
     return metrics

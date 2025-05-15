@@ -252,8 +252,7 @@ class AudioVisualizer:
             metrics["words_per_minute"],
         )
 
-        return html
-
+        return html    
     def generate_web_visualization(self, metrics, audio_path):
         """
         Generate a dictionary with all visualization components for web UI
@@ -293,11 +292,171 @@ class AudioVisualizer:
 
         metrics_table = self.generate_metrics_table_html(metrics)
 
+        # Generate speech overlap visualization if transcript data is available
+        speech_overlap_img = self.generate_speech_overlap_visualization(
+            transcript_data, duration, filename
+        )
+
         return {
             "timeline_img": timeline_img,
             "waveform_img": waveform_img,
             "latency_hist_img": latency_hist_img,
+            "speech_overlap_img": speech_overlap_img,
             "metrics_table": metrics_table,
             "filename": filename,
-            "transcript_dialog": transcript_dialog,  # Added transcript dialog
+            "transcript_dialog": transcript_dialog,
+        }    
+    def generate_speech_overlap_visualization(self, transcript_data, duration, filename=""):
+        """Generate a visualization showing speech overlaps between user and agent.
+        
+        Args:
+            transcript_data: Transcript data dictionary with words and overlap info
+            duration: Total duration of the audio in seconds
+            filename: Name of the file being visualized
+            
+        Returns:
+            Base64 encoded image data
+        """
+        if not transcript_data or "words" not in transcript_data:
+            # Return empty visualization if no transcript data
+            fig, ax = plt.subplots(figsize=(12, 3))
+            ax.text(0.5, 0.5, "No transcript data available", 
+                    horizontalalignment="center", verticalalignment="center",
+                    transform=ax.transAxes)
+            ax.set_xticks([])
+            ax.set_yticks([])
+            
+            # Convert to base64
+            buf = BytesIO()
+            plt.tight_layout()
+            fig.savefig(buf, format="png")
+            buf.seek(0)
+            plt.close(fig)
+            return base64.b64encode(buf.read()).decode("utf-8")
+        
+        # Sort words by start time
+        words = sorted(transcript_data.get("words", []), key=lambda w: w["start"])
+        
+        # Calculate speakers' word counts and overlap stats
+        customer_words = [w for w in words if w["speaker"] == "customer"]
+        agent_words = [w for w in words if w["speaker"] == "ai_agent"]
+        overlap_words = [w for w in words if w.get("is_overlap", False)]
+        
+        customer_word_count = len(customer_words)
+        agent_word_count = len(agent_words)
+        overlap_count = len(overlap_words)
+        overlap_percentage = 0
+        if customer_word_count + agent_word_count > 0:
+            overlap_percentage = (overlap_count / (customer_word_count + agent_word_count)) * 100
+        
+        # Create figure
+        fig, ax = plt.subplots(figsize=(14, 6))
+        
+        # Set plot parameters
+        ax.set_xlim(0, duration)
+        ax.set_ylim(0, 3)
+        ax.set_yticks([1, 2])
+        ax.set_yticklabels(["User (Customer)", "AI Agent"])
+        ax.set_xlabel("Time (seconds)")
+        ax.set_title(f"Speech Analysis with Overlaps for {filename}")
+        ax.grid(axis="x", linestyle="--", alpha=0.7)
+        
+        # Add legend
+        from matplotlib.patches import Patch
+        legend_elements = [
+            Patch(facecolor="blue", alpha=0.7, label="User Speech"),
+            Patch(facecolor="green", alpha=0.7, label="AI Agent Speech"),
+            Patch(facecolor="red", alpha=0.7, label="Speech Overlap")
+        ]
+        ax.legend(handles=legend_elements, loc="upper right")
+        
+        # Track where we've placed text to avoid overlapping labels
+        text_positions = {
+            "customer": [],  # List of (start, end) x-positions for text
+            "ai_agent": []
         }
+        
+        # Add tick marks for word timing
+        word_ticks = []
+        word_labels = []
+        max_ticks = 20  # Limit number of ticks to avoid crowding
+        tick_interval = max(1, len(words) // max_ticks)
+        
+        for i, word in enumerate(words):
+            if i % tick_interval == 0:
+                word_ticks.append(word["start"])
+                word_labels.append(f"{word['start']:.1f}s")
+        
+        # Add a secondary x-axis for word timings
+        ax2 = ax.twiny()
+        ax2.set_xlim(ax.get_xlim())
+        ax2.set_xticks(word_ticks)
+        ax2.set_xticklabels(word_labels, rotation=45)
+        ax2.tick_params(axis='x', colors='gray')
+        ax2.set_xlabel('Word Start Times (seconds)', color='gray')
+        
+        # Plot words
+        for word in words:
+            start = word["start"]
+            end = word["end"]
+            text = word["text"]
+            speaker = word["speaker"]
+            is_overlap = word.get("is_overlap", False)
+            
+            # Determine y-position based on speaker
+            if speaker == "customer":
+                y_pos = 1
+                text_y = 0.7
+            else:  # ai_agent
+                y_pos = 2
+                text_y = 2.3
+            
+            # Determine color based on overlap
+            color = "red" if is_overlap else ("blue" if speaker == "customer" else "green")
+            
+            # Draw rectangle for the word
+            ax.add_patch(
+                plt.Rectangle((start, y_pos - 0.1), end - start, 0.2, 
+                            color=color, alpha=0.7)
+            )
+            
+            # Add text label for longer words or if it doesn't overlap with existing text
+            word_duration = end - start
+            should_label = word_duration > 0.2  # Only label words of sufficient duration
+            
+            if should_label:
+                # Check if text would overlap with any existing text
+                overlaps = False
+                for s, e in text_positions.get(speaker, []):
+                    if start <= e and end >= s:  # Overlap with existing text
+                        overlaps = True
+                        break
+                
+                if not overlaps:
+                    label = text
+                    if is_overlap:
+                        label = f"{text}*"  # Mark overlapping words with asterisk
+                    ax.text(start, text_y, label, fontsize=8)
+                    text_positions[speaker].append((start, end))
+        
+        # Add statistics
+        overlap_count = transcript_data.get("overlap_count", 0)
+        has_overlaps = transcript_data.get("has_overlaps", False)
+        
+        stats_text = f"Overlapping Speech: {'Yes' if has_overlaps else 'No'}\n"
+        stats_text += f"Overlap Count: {overlap_count} words\n"
+        stats_text += f"User Words: {customer_word_count}, Agent Words: {agent_word_count}\n"
+        stats_text += f"Overlap Percentage: {overlap_percentage:.1f}% of words"
+        
+        ax.text(0.01, 0.01, stats_text,
+                transform=ax.transAxes, fontsize=10,
+                bbox=dict(facecolor="white", alpha=0.7))
+        
+        # Convert to base64
+        buf = BytesIO()
+        plt.tight_layout()
+        fig.savefig(buf, format="png")
+        buf.seek(0)
+        plt.close(fig)
+        
+        return base64.b64encode(buf.read()).decode("utf-8")

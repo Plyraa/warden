@@ -88,12 +88,75 @@
         .loading {
             display: none;
             margin-top: 20px;
-            text-align: center;
+        }
+        
+        .spinner {
+            border: 5px solid #f3f3f3;
+            border-top: 5px solid #3498db;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 2s linear infinite;
+            margin: 0 auto;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
         }
         
         .audio-player {
-            margin-top: 20px;
+            margin: 20px 0;
+            display: none;
+        }
+        
+        audio {
             width: 100%;
+        }
+        
+        .transcript-container {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #f9f9f9;
+            border-radius: 5px;
+            max-height: 300px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            line-height: 1.5;
+        }
+        
+        .overlap {
+            background-color: #ffcccc;
+            padding: 2px 4px;
+            border-radius: 3px;
+            font-weight: bold;
+        }
+        
+        .tabs {
+            display: flex;
+            margin-bottom: 10px;
+            border-bottom: 1px solid #ddd;
+        }
+        
+        .tab {
+            padding: 10px 20px;
+            cursor: pointer;
+            background-color: #f1f1f1;
+            margin-right: 5px;
+            border-radius: 5px 5px 0 0;
+        }
+        
+        .tab.active {
+            background-color: #4CAF50;
+            color: white;
+        }
+        
+        .tab-content {
+            display: none;
+        }
+        
+        .tab-content.active {
+            display: block;
         }
     </style>
 </head>
@@ -102,47 +165,67 @@
         <h1>Call Center Audio Analysis</h1>
         
         <div class="file-selector">
-            <h2>Select Audio File</h2>
+            <h3>Select Audio File</h3>
             <form id="audioForm">
-                <select id="audioFile" name="audioFile">
-                    <!-- Options will be populated dynamically -->
+                <select id="audioFile" required>
+                    <option value="">-- Select a file --</option>
                 </select>
                 <button type="submit">Analyze</button>
             </form>
-            <div class="loading" id="loadingIndicator">
-                <p>Processing audio... This may take a few moments.</p>
-            </div>
         </div>
         
-        <div id="audioPlayer" class="audio-player" style="display: none;">
-            <h2>Audio Player</h2>
-            <audio controls id="audioElement" style="width: 100%;">
-                <source src="" type="audio/mpeg">
-                Your browser does not support the audio element.
-            </audio>
+        <div class="audio-player" id="audioPlayer">
+            <h3>Audio Playback</h3>
+            <audio id="audioElement" controls></audio>
+        </div>
+        
+        <div class="loading" id="loadingIndicator">
+            <p>Processing audio... This may take a moment.</p>
+            <div class="spinner"></div>
         </div>
         
         <div id="resultContainer" style="display: none;">
-            <div class="visualization-section">
-                <h2>Conversation Timeline</h2>
-                <p>This timeline shows when the user (left channel) and AI agent (right channel) were speaking during the call.</p>
-                <img id="timelineImage" class="visualization-image" src="" alt="Timeline visualization">
+            <div class="tabs">
+                <div class="tab active" data-tab="visualizations">Visualizations</div>
+                <div class="tab" data-tab="transcript">Transcript</div>
             </div>
             
-            <div class="visualization-section">
-                <h2>Waveform Visualization</h2>
-                <p>This shows the audio waveforms for both channels with speaking intervals highlighted.</p>
-                <img id="waveformImage" class="visualization-image" src="" alt="Waveform visualization">
+            <div class="tab-content active" id="visualizations">
+                <div class="visualization-section">
+                    <h2>Conversation Timeline</h2>
+                    <p>This timeline shows when the user (left channel) and AI agent (right channel) were speaking during the call.</p>
+                    <img id="timelineImage" class="visualization-image" src="" alt="Timeline visualization">
+                </div>
+                
+                <div class="visualization-section">
+                    <h2>Speech Overlap Analysis</h2>
+                    <p>This visualization shows the word-level timing and highlights speech overlaps between the user and AI agent.</p>
+                    <img id="speechOverlapImage" class="visualization-image" src="" alt="Speech overlap visualization">
+                </div>
+                
+                <div class="visualization-section">
+                    <h2>Waveform Visualization</h2>
+                    <p>This shows the audio waveforms for both channels with speaking intervals highlighted.</p>
+                    <img id="waveformImage" class="visualization-image" src="" alt="Waveform visualization">
+                </div>
+                
+                <div class="visualization-section">
+                    <h2>Response Latency Distribution</h2>
+                    <p>This histogram shows the distribution of AI agent response latencies after user utterances.</p>
+                    <img id="latencyHistImage" class="visualization-image" src="" alt="Latency histogram">
+                </div>
+                
+                <div id="metricsTable">
+                    <!-- Metrics table will be inserted here -->
+                </div>
             </div>
             
-            <div class="visualization-section">
-                <h2>Response Latency Distribution</h2>
-                <p>This histogram shows the distribution of AI agent response latencies after user utterances.</p>
-                <img id="latencyHistImage" class="visualization-image" src="" alt="Latency histogram">
-            </div>
-            
-            <div id="metricsTable">
-                <!-- Metrics table will be inserted here -->
+            <div class="tab-content" id="transcript">
+                <h2>Conversation Transcript</h2>
+                <p>This is the transcribed conversation with speech overlaps highlighted in red.</p>
+                <div id="transcriptContainer" class="transcript-container">
+                    <!-- Transcript will be inserted here -->
+                </div>
             </div>
         </div>
     </div>
@@ -189,9 +272,20 @@
                     document.getElementById('timelineImage').src = `data:image/png;base64,${data.timeline_img}`;
                     document.getElementById('waveformImage').src = `data:image/png;base64,${data.waveform_img}`;
                     document.getElementById('latencyHistImage').src = `data:image/png;base64,${data.latency_hist_img}`;
+                    document.getElementById('speechOverlapImage').src = `data:image/png;base64,${data.speech_overlap_img}`;
                     
                     // Update metrics table
                     document.getElementById('metricsTable').innerHTML = data.metrics_table;
+                    
+                    // Format and display transcript
+                    const transcriptContainer = document.getElementById('transcriptContainer');
+                    if (data.transcript_dialog) {
+                        // Process transcript to highlight overlaps
+                        const formattedTranscript = formatTranscriptWithOverlaps(data.transcript_dialog);
+                        transcriptContainer.innerHTML = formattedTranscript;
+                    } else {
+                        transcriptContainer.innerHTML = '<em>No transcript available for this recording.</em>';
+                    }
                     
                     // Show results
                     resultContainer.style.display = 'block';
@@ -203,6 +297,28 @@
                     alert('An error occurred during analysis. Please try again.');
                 });
             });
+            
+            // Tab functionality
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.addEventListener('click', function() {
+                    // Remove active class from all tabs
+                    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+                    
+                    // Add active class to clicked tab
+                    this.classList.add('active');
+                    
+                    // Show corresponding content
+                    const tabId = this.getAttribute('data-tab');
+                    document.getElementById(tabId).classList.add('active');
+                });
+            });
+            
+            // Function to format transcript with overlaps highlighted
+            function formatTranscriptWithOverlaps(transcript) {
+                // Look for words marked with [OVERLAP] tag and wrap them in span
+                return transcript.replace(/(\S+)\[OVERLAP\]/g, '<span class="overlap">$1</span>');
+            }
         });
     </script>
 </body>

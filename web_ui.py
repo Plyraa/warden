@@ -152,12 +152,21 @@ with open("templates/index.html", "w") as f:
             white-space: pre-wrap;
             line-height: 1.5;
         }
-        
-        .overlap {
+          .overlap {
             background-color: #ffcccc;
             padding: 2px 4px;
             border-radius: 3px;
             font-weight: bold;
+        }
+        
+        .placeholder-notice {
+            margin-bottom: 15px;
+            padding: 10px;
+            background-color: #e6f7ff;
+            border-left: 4px solid #1890ff;
+            border-radius: 4px;
+            font-size: 14px;
+            line-height: 1.5;
         }
         
         .tabs {
@@ -304,13 +313,23 @@ with open("templates/index.html", "w") as f:
                     
                     // Update metrics table
                     document.getElementById('metricsTable').innerHTML = data.metrics_table;
-                    
-                    // Format and display transcript
+                      // Format and display transcript
                     const transcriptContainer = document.getElementById('transcriptContainer');
                     if (data.transcript_dialog) {
                         // Process transcript to highlight overlaps
                         const formattedTranscript = formatTranscriptWithOverlaps(data.transcript_dialog);
-                        transcriptContainer.innerHTML = formattedTranscript;
+                        
+                        // Add notice for placeholder transcripts
+                        if (data.is_placeholder_transcript) {
+                            transcriptContainer.innerHTML = 
+                                '<div class="placeholder-notice">' +
+                                '<strong>Note:</strong> This is a placeholder transcript generated from speech timing data. ' +
+                                'No actual transcription was performed to save API credits. ' +
+                                'The transcript shows the timing of speech segments rather than actual words.' +
+                                '</div>' + formattedTranscript;
+                        } else {
+                            transcriptContainer.innerHTML = formattedTranscript;
+                        }
                     } else {
                         transcriptContainer.innerHTML = '<em>No transcript available for this recording.</em>';
                     }
@@ -404,6 +423,14 @@ def analyze_audio():
     # Generate visualizations
     output_path = metrics["downsampled_path"]
     vis_data = visualizer.generate_web_visualization(metrics, output_path)
+
+    # Add a flag for placeholder transcripts (generated from segments)
+    if metrics.get("transcript_data") and metrics["transcript_data"].get(
+        "generated_from_segments"
+    ):
+        vis_data["is_placeholder_transcript"] = True
+    else:
+        vis_data["is_placeholder_transcript"] = False
 
     return jsonify(vis_data)
 

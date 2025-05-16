@@ -188,15 +188,13 @@ class AudioMetricsCalculator:
             with open(audio_path, "rb") as f:
                 response = self.elevenlabs_client.speech_to_text.convert(
                     file=f,
-                    model_id="scribe_v1",  # Or your preferred model
+                    model_id="scribe_v1_experimental",  # Or your preferred model
                     diarize=False,
                     num_speakers=1,
                     timestamps_granularity="word",
                     tag_audio_events=False,  # Set to True if you need event tags
                 )
-            print(
-                f"response from ElevenLabs for {audio_path} ({speaker_label}): {response}"
-            )
+
             # Convert response words to dictionaries that can be modified
             words = []
             if hasattr(response, "words") and response.words:
@@ -204,7 +202,7 @@ class AudioMetricsCalculator:
                     # Skip spaces and non-word elements to focus on actual speech
                     if hasattr(word_obj, "type") and word_obj.type != "word":
                         continue
-                        
+
                     # Create a dictionary with the word data and speaker label
                     word_dict = {
                         "text": word_obj.text,
@@ -217,7 +215,6 @@ class AudioMetricsCalculator:
                         "speaker_id": getattr(word_obj, "speaker_id", None),
                     }
                     words.append(word_dict)
-                print(f"words: {words}")
             return words
 
         except Exception as e:
@@ -227,65 +224,154 @@ class AudioMetricsCalculator:
     def _merge_and_format_transcript(self, words_customer, words_agent):
         """Merges word lists from customer and agent, sorts them, and formats into a dialog.
         Also detects and marks overlapping speech segments."""
-        all_words = sorted(words_customer + words_agent, key=lambda w: w["start"])
-        
-        # Identify overlapping speech
+        # First, ensure all words have the correct speaker attribute
+        for word in words_customer:
+            word["speaker"] = "customer" if "speaker" not in word else word["speaker"]
+
+        for word in words_agent:
+            word["speaker"] = "ai_agent" if "speaker" not in word else word["speaker"]
+
+        # Sort all words strictly by start time, then by end time if start times are equal
+        all_words = sorted(
+            words_customer + words_agent, key=lambda w: (w["start"], w["end"])
+        )
+
+        # Initialize overlap flag for all words
         for word in all_words:
-            word["is_overlap"] = False  # Default: no overlap
-        
-        # Check each word against words from the other speaker
-        for word in all_words:
-            word_start = word["start"]
-            word_end = word["end"]
-            speaker = word["speaker"]
-            
-            # Look for overlaps with words from other speakers
-            for other_word in all_words:
-                if other_word["speaker"] != speaker:  # Different speaker
-                    other_start = other_word["start"]
-                    other_end = other_word["end"]
-                    
-                    # Check for overlap (any partial overlap counts)
-                    if (word_start < other_end and word_end > other_start):
-                        word["is_overlap"] = True
-                        other_word["is_overlap"] = True
-        
-        # Build dialog with improved formatting
+            word["is_overlap"] = False
+
+        # Use consistent parameters for overlap detection across the application
+        transition_buffer = 0.2  # 200ms buffer to allow for natural transitions
+        min_overlap_duration = 0.15  # Minimum duration of overlap to count (150ms)
+        min_intrusion_ratio = 0.20  # At least 20% overlap to count as significant
+
+        # Group words by speaker to avoid expensive pairwise comparisons
+        customer_words = [w for w in all_words if w["speaker"] == "customer"]
+        agent_words = [w for w in all_words if w["speaker"] == "ai_agent"]
+
+        # Function to detect overlaps between two speaker streams
+        def detect_overlaps(words_a, words_b):
+            # Group consecutive words from the same speaker into phrases
+            def group_into_phrases(words):
+                if not words:
+                    return []
+
+                phrases = []
+                current_phrase = [words[0]]
+
+                for i in range(1, len(words)):
+                    # If words are close enough, consider them part of the same phrase
+                    if (
+                        words[i]["start"] - words[i - 1]["end"] < 0.3
+                    ):  # 300ms gap threshold
+                        current_phrase.append(words[i])
+                    else:
+                        # End current phrase and start a new one
+                        if current_phrase:
+                            start = current_phrase[0]["start"]
+                            end = current_phrase[-1]["end"]
+                            phrases.append((start, end, current_phrase))
+                        current_phrase = [words[i]]
+
+                # Add the last phrase
+                if current_phrase:
+                    start = current_phrase[0]["start"]
+                    end = current_phrase[-1]["end"]
+                    phrases.append((start, end, current_phrase))
+
+                return phrases
+
+            # Group words into phrases for both speakers
+            phrases_a = group_into_phrases(words_a)
+            phrases_b = group_into_phrases(words_b)
+
+            # Check for overlaps between phrases
+            for start_a, end_a, words_a in phrases_a:
+                duration_a = end_a - start_a
+
+                for start_b, end_b, words_b in phrases_b:
+                    # Check if phrases overlap in time
+                    if start_b < end_a and start_a < end_b:
+                        # Calculate overlap
+                        overlap_start = max(start_a, start_b)
+                        overlap_end = min(end_a, end_b)
+                        overlap_duration = overlap_end - overlap_start
+
+                        # Only consider significant overlaps
+                        if overlap_duration > min_overlap_duration:
+                            # Check for natural transition vs. true overlap
+                            if start_b > start_a:
+                                # B started after A - check if B started too early (interrupting A)
+                                if start_b < end_a - transition_buffer:
+                                    intrusion_ratio = overlap_duration / duration_a
+                                    if intrusion_ratio > min_intrusion_ratio:
+                                        # Mark all words in the overlapping section
+                                        for word in words_a:
+                                            if word["end"] > overlap_start:
+                                                word["is_overlap"] = True
+                                        for word in words_b:
+                                            if word["start"] < overlap_end:
+                                                word["is_overlap"] = True
+                            else:
+                                # A started after B - check if A started too early (interrupting B)
+                                duration_b = end_b - start_b
+                                if start_a < end_b - transition_buffer:
+                                    intrusion_ratio = overlap_duration / duration_b
+                                    if intrusion_ratio > min_intrusion_ratio:
+                                        # Mark all words in the overlapping section
+                                        for word in words_b:
+                                            if word["end"] > overlap_start:
+                                                word["is_overlap"] = True
+                                        for word in words_a:
+                                            if word["start"] < overlap_end:
+                                                word["is_overlap"] = True
+
+        # Detect overlaps between customer and agent
+        detect_overlaps(customer_words, agent_words)
+
+        # Build dialog by grouping consecutive words from the same speaker
         dialog_parts = []
-        current_buffer, current_speaker = [], None
-        
+        current_buffer = []
+        current_speaker = None
+
         for word_info in all_words:
             word_text = word_info["text"]
             speaker = word_info["speaker"]
             is_overlap = word_info.get("is_overlap", False)
-            
+
             # Add overlap indicator to words that overlap
             marked_text = word_text
             if is_overlap:
                 marked_text = f"{word_text}[OVERLAP]"
-            
+
+            # If speaker changes, start a new utterance
             if speaker != current_speaker:
-                if current_buffer:
+                if current_buffer:  # Append the previous speaker's utterance
                     dialog_parts.append(
                         f"{current_speaker.upper()}: {' '.join(current_buffer)}"
                     )
-                current_buffer, current_speaker = [marked_text], speaker
+                current_buffer = [marked_text]
+                current_speaker = speaker
             else:
                 current_buffer.append(marked_text)
 
-        if current_buffer:  # Append the last utterance
+        # Don't forget the last utterance
+        if current_buffer:
             dialog_parts.append(
                 f"{current_speaker.upper()}: {' '.join(current_buffer)}"
             )
 
+        # Join all dialog parts with newlines
         full_dialog = "\\n".join(dialog_parts)
-        
+
         # Create an extended result with overlap information
         return {
             "words": all_words,
             "dialog": full_dialog,
             "has_overlaps": any(word.get("is_overlap", False) for word in all_words),
-            "overlap_count": sum(1 for word in all_words if word.get("is_overlap", False))
+            "overlap_count": sum(
+                1 for word in all_words if word.get("is_overlap", False)
+            ),
         }
 
     def _get_transcript_for_file(self, original_stereo_filepath: str):
@@ -459,31 +545,68 @@ class AudioMetricsCalculator:
         return latencies
 
     def detect_ai_interrupting_user(self, user_windows, agent_windows):
-        """Check if AI agent interrupts user during conversation"""
-        for user_window in user_windows:
-            user_start, user_end = user_window
+        """Check if AI agent interrupts user during conversation, using improved detection logic"""
+        # Use same parameters as in transcript overlap detection for consistency
+        transition_buffer = 0.2  # 200ms buffer to allow for natural transitions
+        min_overlap_duration = 0.15  # Minimum duration of overlap to count
+        min_intrusion_ratio = 0.20  # At least 20% overlap to count as significant
 
-            # Check if any agent window overlaps with user window
-            for (
-                agent_start,
-                _agent_end,
-            ) in agent_windows:  # Use _agent_end as it's not used
+        for user_start, user_end in user_windows:
+            user_duration = user_end - user_start
+
+            # Skip very short utterances that might be noise
+            if user_duration < 0.3:  # Less than 300ms
+                continue
+
+            # Check if any agent window starts while user is speaking (with a buffer)
+            for agent_start, agent_end in agent_windows:
                 # Agent started speaking while user was speaking
-                if agent_start > user_start and agent_start < user_end:
-                    return True
+                if (
+                    agent_start > user_start
+                    and agent_start < user_end - transition_buffer
+                ):
+                    # Calculate how much of the user's speech was interrupted
+                    overlap_duration = min(user_end, agent_end) - agent_start
+
+                    # Only count as interruption if substantial
+                    if (
+                        overlap_duration > min_overlap_duration
+                        and overlap_duration / user_duration > min_intrusion_ratio
+                    ):
+                        return True
 
         return False
 
     def detect_user_interrupting_ai(self, user_windows, agent_windows):
-        """Check if user interrupts AI agent during conversation"""
-        for agent_window in agent_windows:
-            agent_start, agent_end = agent_window
+        """Check if user interrupts AI agent during conversation, using improved detection logic"""
+        # Use same parameters as in transcript overlap detection for consistency
+        transition_buffer = 0.2  # 200ms buffer to allow for natural transitions
+        min_overlap_duration = 0.15  # Minimum duration of overlap to count
+        min_intrusion_ratio = 0.20  # At least 20% overlap to count as significant
 
-            # Check if any user window overlaps with agent window
-            for user_start, _user_end in user_windows:  # Use _user_end as it's not used
+        for agent_start, agent_end in agent_windows:
+            agent_duration = agent_end - agent_start
+
+            # Skip very short utterances that might be noise
+            if agent_duration < 0.3:  # Less than 300ms
+                continue
+
+            # Check if any user window starts while agent is speaking (with a buffer)
+            for user_start, user_end in user_windows:
                 # User started speaking while agent was speaking
-                if user_start > agent_start and user_start < agent_end:
-                    return True
+                if (
+                    user_start > agent_start
+                    and user_start < agent_end - transition_buffer
+                ):
+                    # Calculate how much of the agent's speech was interrupted
+                    overlap_duration = min(agent_end, user_end) - user_start
+
+                    # Only count as interruption if substantial
+                    if (
+                        overlap_duration > min_overlap_duration
+                        and overlap_duration / agent_duration > min_intrusion_ratio
+                    ):
+                        return True
 
         return False
 
@@ -564,6 +687,94 @@ class AudioMetricsCalculator:
         else:
             return 0
 
+    def _generate_placeholder_transcript_from_segments(
+        self, user_windows, agent_windows
+    ):
+        """
+        Generate a placeholder transcript from speech segments when actual transcript is not available.
+        This helps visualize the conversation flow without re-calling the ElevenLabs API.
+
+        Args:
+            user_windows: List of (start_time, end_time) tuples for user speech
+            agent_windows: List of (start_time, end_time) tuples for agent speech
+
+        Returns:
+            Dictionary with transcript data in the same format as from _merge_and_format_transcript
+        """
+        words_customer = []
+        words_agent = []
+
+        # Create word-level data from speech segments with estimated word positions
+        for i, (start, end) in enumerate(user_windows):
+            # Create a simple placeholder word for each segment
+            duration = end - start
+            word_count = max(
+                1, int(duration / 0.3)
+            )  # Rough estimate: 1 word per 0.3 seconds
+
+            for j in range(word_count):
+                # Distribute words evenly within the segment
+                word_start = start + (duration * j / word_count)
+                word_end = start + (duration * (j + 1) / word_count)
+
+                words_customer.append(
+                    {
+                        "text": "...",  # Using ellipsis as placeholder for better visualization
+                        "start": word_start,
+                        "end": word_end,
+                        "speaker": "customer",
+                    }
+                )
+
+        for i, (start, end) in enumerate(agent_windows):
+            # Create a simple placeholder word for each segment
+            duration = end - start
+            word_count = max(
+                1, int(duration / 0.3)
+            )  # Rough estimate: 1 word per 0.3 seconds
+
+            for j in range(word_count):
+                # Distribute words evenly within the segment
+                word_start = start + (duration * j / word_count)
+                word_end = start + (duration * (j + 1) / word_count)
+
+                words_agent.append(
+                    {
+                        "text": "...",  # Using ellipsis as placeholder for better visualization
+                        "start": word_start,
+                        "end": word_end,
+                        "speaker": "ai_agent",
+                    }
+                )
+
+        # Merge the words from both speakers
+        transcript_data = self._merge_and_format_transcript(words_customer, words_agent)
+
+        # Mark that this transcript was generated from segments
+        transcript_data["generated_from_segments"] = True
+
+        # Create a more readable dialog representation
+        dialog_parts = []
+
+        # Sort segments by start time to get conversation flow
+        all_segments = [(start, end, "CUSTOMER") for start, end in user_windows] + [
+            (start, end, "AI_AGENT") for start, end in agent_windows
+        ]
+        all_segments.sort(key=lambda x: x[0])  # Sort by start time
+
+        # Build a simplified dialog representation
+        for start, end, speaker in all_segments:
+            duration = end - start
+            seconds = round(duration, 1)
+            dialog_parts.append(
+                f"{speaker}: [Speech segment from {start:.1f}s to {end:.1f}s, duration {seconds}s]"
+            )
+
+        # Replace the placeholder dialog with this more informative version
+        transcript_data["dialog"] = "\\n".join(dialog_parts)
+
+        return transcript_data
+
     def process_file(self, filename):
         """Process a single audio file and calculate all metrics.
         Checks database first, if found, returns stored metrics.
@@ -579,20 +790,46 @@ class AudioMetricsCalculator:
                 metrics = recreate_metrics_from_db(existing_analysis_db)
                 _audio, _sr, _output_path = self.downsample_audio(filename)
                 metrics["downsampled_path"] = _output_path
-                # If transcript is missing from old record, try to generate it now
+
+                # Check if we need to generate transcript data
                 if not metrics.get("transcript_data") and self.elevenlabs_client:
-                    print(
-                        f"Transcript data missing for {filename}, attempting to generate."
-                    )
-                    original_file_path = os.path.join(self.input_dir, filename)
-                    transcript_data = self._get_transcript_for_file(original_file_path)
-                    if transcript_data:
+                    # Check if we have speech segments that can be used instead of calling the API
+                    user_windows = metrics.get("user_windows", [])
+                    agent_windows = metrics.get("agent_windows", [])
+
+                    if user_windows and agent_windows:
+                        print(
+                            f"Found speech segments for {filename} in database. Generating transcript from existing segments."
+                        )
+                        # Create mock transcript data from speech segments without calling ElevenLabs API
+                        transcript_data = (
+                            self._generate_placeholder_transcript_from_segments(
+                                user_windows, agent_windows
+                            )
+                        )
                         metrics["transcript_data"] = transcript_data
                         print(
-                            f"Generated transcript for {filename} (was missing from DB)."
+                            f"Generated placeholder transcript from speech segments for {filename}."
                         )
                     else:
-                        print(f"Failed to generate missing transcript for {filename}.")
+                        # No segments available, attempt transcription if client is available
+                        print(
+                            f"Transcript data missing for {filename}, attempting to generate from audio."
+                        )
+                        original_file_path = os.path.join(self.input_dir, filename)
+                        transcript_data = self._get_transcript_for_file(
+                            original_file_path
+                        )
+                        if transcript_data:
+                            metrics["transcript_data"] = transcript_data
+                            print(
+                                f"Generated transcript for {filename} (was missing from DB)."
+                            )
+                        else:
+                            print(
+                                f"Failed to generate missing transcript for {filename}."
+                            )
+
                 return metrics
 
             print(f"No existing analysis for {filename} in database. Processing anew.")
@@ -614,7 +851,9 @@ class AudioMetricsCalculator:
                 transcript_data = self._get_transcript_for_file(original_file_path)
                 if transcript_data:
                     print(f"Successfully transcribed {filename}.")
-                    print(f"Found {transcript_data.get('overlap_count', 0)} overlapping speech segments.")
+                    print(
+                        f"Found {transcript_data.get('overlap_count', 0)} overlapping speech segments."
+                    )
                 else:
                     print(f"Transcription failed or yielded no data for {filename}.")
             else:
@@ -653,7 +892,9 @@ class AudioMetricsCalculator:
 
             # Add new analysis to database
             add_analysis(db_session, metrics)
-            print(f"Saved new analysis for {filename} to database with improved transcript handling.")
+            print(
+                f"Saved new analysis for {filename} to database with improved transcript handling."
+            )
             return metrics
         finally:
             db_session.close()

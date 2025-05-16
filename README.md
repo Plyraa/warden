@@ -132,3 +132,18 @@ This will verify that:
 1. The ElevenLabs API response is processed correctly
 2. Overlapping speech is detected properly
 3. Transcript data is stored correctly in the database
+
+## Optimizing ElevenLabs API Usage
+
+The system now includes an optimization to save API credits:
+
+- When a file has been analyzed before but doesn't have transcript data, the system checks if speech segments (user_windows and agent_windows) are available in the database.
+- If speech segments exist, it generates a transcript without calling the ElevenLabs API.
+- This script shows the timing and flow of the conversation without actual transcribed words.
+- The web UI clearly indicates when a transcript is being displayed.
+
+### When API Calls Are Made
+
+The system will only call the ElevenLabs API when:
+1. Processing a new audio file for the first time
+2. Manually requesting transcription for a file that has no speech segments in the database

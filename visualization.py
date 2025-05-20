@@ -411,17 +411,14 @@ class AudioVisualizer:
         for word in words:
             start = word["start"]
             end = word["end"]
-            text = word["text"]
             speaker = word["speaker"]
             is_overlap = word.get("is_overlap", False)
 
             # Determine y-position based on speaker
             if speaker == "customer":
                 y_pos = 1
-                text_y = 0.7
             else:  # ai_agent
                 y_pos = 2
-                text_y = 2.3
 
             # Determine color based on overlap
             color = (
@@ -434,27 +431,6 @@ class AudioVisualizer:
                     (start, y_pos - 0.1), end - start, 0.2, color=color, alpha=0.7
                 )
             )
-
-            # Add text label for longer words or if it doesn't overlap with existing text
-            word_duration = end - start
-            should_label = (
-                word_duration > 0.2
-            )  # Only label words of sufficient duration
-
-            if should_label:
-                # Check if text would overlap with any existing text
-                overlaps = False
-                for s, e in text_positions.get(speaker, []):
-                    if start <= e and end >= s:  # Overlap with existing text
-                        overlaps = True
-                        break
-
-                if not overlaps:
-                    label = text
-                    if is_overlap:
-                        label = f"{text}*"  # Mark overlapping words with asterisk
-                    ax.text(start, text_y, label, fontsize=8)
-                    text_positions[speaker].append((start, end))
 
         # Add statistics
         overlap_count = transcript_data.get("overlap_count", 0)

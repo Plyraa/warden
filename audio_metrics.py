@@ -1,16 +1,10 @@
 import os
-import librosa
 import numpy as np
+import librosa
 import soundfile as sf
-from pydub import AudioSegment  # Added for MP3 handling
-import tempfile
-from pathlib import Path
-import concurrent.futures
-from dotenv import load_dotenv  # Added for .env file support
-import subprocess  # Added for direct ffmpeg calls
-
-# ElevenLabs
-from elevenlabs.client import ElevenLabs
+from pydub import AudioSegment
+from elevenlabs import ElevenLabs
+import traceback  # Added for error logging
 
 # Database imports
 from database import (
@@ -21,6 +15,8 @@ from database import (
 )
 
 # Load environment variables from .env file
+from dotenv import load_dotenv
+
 load_dotenv()
 
 
@@ -118,218 +114,161 @@ class AudioMetricsCalculator:
 
         return audio, target_sr, output_path
 
-    def _split_stereo_audio(self, stereo_audio_path: str, temp_dir: str):
-        """Splits a stereo audio file into two mono files (customer and agent) using subprocess.run with pan filter."""
-        original_path = Path(stereo_audio_path)
-        base_name = original_path.stem
-        original_extension = original_path.suffix  # e.g., .mp3 or .wav
-
-        # Output files will have the same extension as the input
-        customer_path = Path(temp_dir) / f"{base_name}_customer{original_extension}"
-        agent_path = Path(temp_dir) / f"{base_name}_agent{original_extension}"
-
-        # Use pan filter to extract the left channel (customer)
-        customer_command = [
-            "ffmpeg",
-            "-y",  # Overwrite output files without asking
-            "-i",
-            str(stereo_audio_path),
-            "-filter_complex",
-            "pan=mono|c0=c0",  # Extract left channel
-            "-ac",
-            "1",  # Ensure mono output
-            str(customer_path),
-        ]
-
-        # Use pan filter to extract the right channel (agent)
-        agent_command = [
-            "ffmpeg",
-            "-y",  # Overwrite output files without asking
-            "-i",
-            str(stereo_audio_path),
-            "-filter_complex",
-            "pan=mono|c0=c1",  # Extract right channel
-            "-ac",
-            "1",  # Ensure mono output
-            str(agent_path),
-        ]
-
-        try:
-            # Process left channel (customer)
-            # print(f"Executing ffmpeg command: {' '.join(customer_command)}") # For debugging
-            subprocess.run(customer_command, capture_output=True, text=True, check=True)
-
-            # Process right channel (agent)
-            # print(f"Executing ffmpeg command: {' '.join(agent_command)}") # For debugging
-            subprocess.run(agent_command, capture_output=True, text=True, check=True)
-
-            return str(customer_path), str(agent_path)
-        except subprocess.CalledProcessError as e:
-            print(
-                f"Error splitting audio channels for {stereo_audio_path} using subprocess:"
-            )
-            print(f"Command: {' '.join(e.cmd)}")
-            print(f"Return code: {e.returncode}")
-            print(f"Stderr: {e.stderr}")
-            print(f"Stdout: {e.stdout}")
-            return None, None
-        except FileNotFoundError:
-            print(
-                "Error: ffmpeg command not found. Please ensure ffmpeg is installed and in your system's PATH."
-            )
-            return None, None
-
-    def _transcribe_channel(self, audio_path: str, speaker_label: str):
-        """Transcribes a single mono audio file using ElevenLabs Scribe."""
+    def _get_transcript_for_file(self, original_stereo_filepath: str):
+        """Gets transcript for a stereo audio file using ElevenLabs diarization."""
         if not self.elevenlabs_client:
-            return []  # Return empty list if client not initialized
+            print(
+                f"Skipping transcription for {original_stereo_filepath} as ElevenLabs client is not initialized."
+            )
+            return None
 
         try:
-            with open(audio_path, "rb") as f:
+            with open(original_stereo_filepath, "rb") as f:
+                # Call ElevenLabs API with diarization enabled
                 response = self.elevenlabs_client.speech_to_text.convert(
                     file=f,
                     model_id="scribe_v1_experimental",  # Or your preferred model
-                    diarize=False,
-                    num_speakers=1,
+                    diarize=True,  # Enable diarization
+                    num_speakers=2,  # Specify number of speakers
                     timestamps_granularity="word",
-                    tag_audio_events=False,  # Set to True if you need event tags
+                    tag_audio_events=False,
                 )
 
-            # Convert response words to dictionaries that can be modified
-            words = []
+            processed_words = []
             if hasattr(response, "words") and response.words:
+                # Speaker mapping:
+                # Based on testing, ElevenLabs uses "speaker_0" and "speaker_1".
+                # User confirmed that AI (agent) speaks first and is "speaker_0".
+                # Customer is therefore "speaker_1".
+                speaker_map = {
+                    "speaker_0": "ai_agent",  # AI agent speaks first
+                    "speaker_1": "customer",
+                }
+
                 for word_obj in response.words:
-                    # Skip spaces and non-word elements to focus on actual speech
                     if hasattr(word_obj, "type") and word_obj.type != "word":
                         continue
 
-                    # Create a dictionary with the word data and speaker label
+                    raw_speaker_id = getattr(word_obj, "speaker_id", None)
+
+                    if raw_speaker_id not in speaker_map:
+                        # Handle unexpected speaker IDs, or if speaker_id attribute is missing
+                        print(
+                            f"Warning: Unexpected or missing speaker_id: {raw_speaker_id} for word '{word_obj.text}'"
+                        )
+                        # Assign a generic label or skip, depending on desired robustness
+                        mapped_speaker_label = (
+                            f"unknown_{raw_speaker_id or 'nospeakerid'}"
+                        )
+                    else:
+                        mapped_speaker_label = speaker_map[raw_speaker_id]
+
                     word_dict = {
                         "text": word_obj.text,
                         "start": word_obj.start,
                         "end": word_obj.end,
-                        "speaker": speaker_label,
-                        # Store additional data from ElevenLabs response
+                        "speaker": mapped_speaker_label,  # Use the mapped label
                         "logprob": getattr(word_obj, "logprob", None),
                         "type": getattr(word_obj, "type", "word"),
-                        "speaker_id": getattr(word_obj, "speaker_id", None),
+                        "raw_speaker_id": raw_speaker_id,
                     }
-                    words.append(word_dict)
-            return words
+                    processed_words.append(word_dict)
+
+            if not processed_words:
+                print(
+                    f"Transcription returned no words for {original_stereo_filepath}."
+                )
+                return None
+
+            return self._merge_and_format_transcript(processed_words)
 
         except Exception as e:
-            print(f"Error during transcription for {audio_path} ({speaker_label}): {e}")
-            return []
+            print(
+                f"Error during diarized transcription for {original_stereo_filepath}: {e}"
+            )
+            traceback.print_exc()
+            return None
 
-    def _merge_and_format_transcript(self, words_customer, words_agent):
-        """Merges word lists from customer and agent, sorts them, and formats into a dialog.
+    def _merge_and_format_transcript(self, all_words_from_diarization):
+        """Merges word lists (now receives a single list from diarization),
+        sorts them, and formats into a dialog.
         Also detects and marks overlapping speech segments."""
-        # First, ensure all words have the correct speaker attribute
-        for word in words_customer:
-            word["speaker"] = "customer" if "speaker" not in word else word["speaker"]
 
-        for word in words_agent:
-            word["speaker"] = "ai_agent" if "speaker" not in word else word["speaker"]
-
-        # Sort all words strictly by start time, then by end time if start times are equal
+        # Input 'all_words_from_diarization' should have 'speaker' attributes
+        # mapped to "customer", "ai_agent" (or "other_speaker_X") by _get_transcript_for_file.
         all_words = sorted(
-            words_customer + words_agent, key=lambda w: (w["start"], w["end"])
+            all_words_from_diarization, key=lambda w: (w["start"], w["end"])
         )
 
-        # Initialize overlap flag for all words
         for word in all_words:
             word["is_overlap"] = False
 
-        # Use consistent parameters for overlap detection across the application
-        transition_buffer = 0.2  # 200ms buffer to allow for natural transitions
-        min_overlap_duration = 0.15  # Minimum duration of overlap to count (150ms)
-        min_intrusion_ratio = 0.20  # At least 20% overlap to count as significant
+        transition_buffer = 0.2
+        min_overlap_duration = 0.15
+        min_intrusion_ratio = 0.20
 
-        # Group words by speaker to avoid expensive pairwise comparisons
+        # Filter for known speaker roles for overlap detection
         customer_words = [w for w in all_words if w["speaker"] == "customer"]
         agent_words = [w for w in all_words if w["speaker"] == "ai_agent"]
 
-        # Function to detect overlaps between two speaker streams
         def detect_overlaps(words_a, words_b):
-            # Group consecutive words from the same speaker into phrases
             def group_into_phrases(words):
                 if not words:
                     return []
-
                 phrases = []
                 current_phrase = [words[0]]
-
                 for i in range(1, len(words)):
-                    # If words are close enough, consider them part of the same phrase
-                    if (
-                        words[i]["start"] - words[i - 1]["end"] < 0.3
-                    ):  # 300ms gap threshold
+                    if words[i]["start"] - words[i - 1]["end"] < 0.3:
                         current_phrase.append(words[i])
                     else:
-                        # End current phrase and start a new one
                         if current_phrase:
                             start = current_phrase[0]["start"]
                             end = current_phrase[-1]["end"]
                             phrases.append((start, end, current_phrase))
                         current_phrase = [words[i]]
-
-                # Add the last phrase
                 if current_phrase:
                     start = current_phrase[0]["start"]
                     end = current_phrase[-1]["end"]
                     phrases.append((start, end, current_phrase))
-
                 return phrases
 
-            # Group words into phrases for both speakers
             phrases_a = group_into_phrases(words_a)
             phrases_b = group_into_phrases(words_b)
 
-            # Check for overlaps between phrases
-            for start_a, end_a, words_a in phrases_a:
+            for start_a, end_a, phrase_words_a in phrases_a:
                 duration_a = end_a - start_a
-
-                for start_b, end_b, words_b in phrases_b:
-                    # Check if phrases overlap in time
+                for start_b, end_b, phrase_words_b in phrases_b:
                     if start_b < end_a and start_a < end_b:
-                        # Calculate overlap
                         overlap_start = max(start_a, start_b)
                         overlap_end = min(end_a, end_b)
                         overlap_duration = overlap_end - overlap_start
-
-                        # Only consider significant overlaps
                         if overlap_duration > min_overlap_duration:
-                            # Check for natural transition vs. true overlap
                             if start_b > start_a:
-                                # B started after A - check if B started too early (interrupting A)
                                 if start_b < end_a - transition_buffer:
                                     intrusion_ratio = overlap_duration / duration_a
                                     if intrusion_ratio > min_intrusion_ratio:
-                                        # Mark all words in the overlapping section
-                                        for word in words_a:
+                                        for word in phrase_words_a:
                                             if word["end"] > overlap_start:
                                                 word["is_overlap"] = True
-                                        for word in words_b:
+                                        for word in phrase_words_b:
                                             if word["start"] < overlap_end:
                                                 word["is_overlap"] = True
                             else:
-                                # A started after B - check if A started too early (interrupting B)
                                 duration_b = end_b - start_b
                                 if start_a < end_b - transition_buffer:
                                     intrusion_ratio = overlap_duration / duration_b
                                     if intrusion_ratio > min_intrusion_ratio:
-                                        # Mark all words in the overlapping section
-                                        for word in words_b:
+                                        for word in phrase_words_b:
                                             if word["end"] > overlap_start:
                                                 word["is_overlap"] = True
-                                        for word in words_a:
+                                        for word in phrase_words_a:
                                             if word["start"] < overlap_end:
                                                 word["is_overlap"] = True
 
-        # Detect overlaps between customer and agent
-        detect_overlaps(customer_words, agent_words)
+        # Only detect overlaps if both customer and agent words are present
+        if customer_words and agent_words:
+            detect_overlaps(customer_words, agent_words)
 
-        # Build dialog by grouping consecutive words from the same speaker
         dialog_parts = []
         current_buffer = []
         current_speaker = None
@@ -338,33 +277,25 @@ class AudioMetricsCalculator:
             word_text = word_info["text"]
             speaker = word_info["speaker"]
             is_overlap = word_info.get("is_overlap", False)
+            marked_text = f"{word_text}[OVERLAP]" if is_overlap else word_text
 
-            # Add overlap indicator to words that overlap
-            marked_text = word_text
-            if is_overlap:
-                marked_text = f"{word_text}[OVERLAP]"
-
-            # If speaker changes, start a new utterance
             if speaker != current_speaker:
-                if current_buffer:  # Append the previous speaker's utterance
+                if current_buffer and current_speaker:
                     dialog_parts.append(
-                        f"{current_speaker.upper()}: {' '.join(current_buffer)}"
+                        f"{str(current_speaker).upper()}: {' '.join(current_buffer)}"
                     )
                 current_buffer = [marked_text]
                 current_speaker = speaker
             else:
                 current_buffer.append(marked_text)
 
-        # Don't forget the last utterance
-        if current_buffer:
+        if current_buffer and current_speaker:
             dialog_parts.append(
-                f"{current_speaker.upper()}: {' '.join(current_buffer)}"
+                f"{str(current_speaker).upper()}: {' '.join(current_buffer)}"
             )
 
-        # Join all dialog parts with newlines
         full_dialog = "\\n".join(dialog_parts)
 
-        # Create an extended result with overlap information
         return {
             "words": all_words,
             "dialog": full_dialog,
@@ -373,44 +304,6 @@ class AudioMetricsCalculator:
                 1 for word in all_words if word.get("is_overlap", False)
             ),
         }
-
-    def _get_transcript_for_file(self, original_stereo_filepath: str):
-        """Gets transcript for a stereo audio file."""
-        if not self.elevenlabs_client:
-            print(
-                f"Skipping transcription for {original_stereo_filepath} as ElevenLabs client is not initialized."
-            )
-            return None
-
-        with tempfile.TemporaryDirectory() as td:
-            customer_mono_path, agent_mono_path = self._split_stereo_audio(
-                original_stereo_filepath, td
-            )
-
-            if not customer_mono_path or not agent_mono_path:
-                print(
-                    f"Failed to split channels for {original_stereo_filepath}, skipping transcription."
-                )
-                return None
-
-            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-                future_customer = executor.submit(
-                    self._transcribe_channel, customer_mono_path, "customer"
-                )
-                future_agent = executor.submit(
-                    self._transcribe_channel, agent_mono_path, "ai_agent"
-                )
-
-                words_customer = future_customer.result()
-                words_agent = future_agent.result()
-
-            if not words_customer and not words_agent:
-                print(
-                    f"Transcription failed for both channels of {original_stereo_filepath}."
-                )
-                return None
-
-            return self._merge_and_format_transcript(words_customer, words_agent)
 
     def calculate_activity_windows(
         self,
@@ -748,7 +641,9 @@ class AudioMetricsCalculator:
                 )
 
         # Merge the words from both speakers
-        transcript_data = self._merge_and_format_transcript(words_customer, words_agent)
+        transcript_data = self._merge_and_format_transcript(
+            words_customer + words_agent
+        )
 
         # Mark that this transcript was generated from segments
         transcript_data["generated_from_segments"] = True

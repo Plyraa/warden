@@ -10,6 +10,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Text,
+    inspect,
 )
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from sqlalchemy.sql import func
@@ -34,10 +35,20 @@ class AudioAnalysis(Base):
     downsampled_filepath = Column(String, nullable=False)
     analysis_timestamp = Column(DateTime(timezone=True), server_default=func.now())
 
+    # Legacy latency metrics (using activity windows)
     avg_latency_ms = Column(Float)
     p10_latency_ms = Column(Float)
     p50_latency_ms = Column(Float)
     p90_latency_ms = Column(Float)
+    
+    # VAD-based latency metrics (using Silero VAD)
+    vad_avg_latency = Column(Float)
+    vad_min_latency = Column(Float)
+    vad_max_latency = Column(Float)
+    vad_p10_latency = Column(Float)
+    vad_p50_latency = Column(Float)
+    vad_p90_latency = Column(Float)
+    vad_latency_details_json = Column(String)  # JSON string of detailed latency data
 
     ai_interrupting_user = Column(Boolean)
     user_interrupting_ai = Column(Boolean)
@@ -46,6 +57,7 @@ class AudioAnalysis(Base):
     words_per_minute = Column(Float)
 
     user_speech_segments_json = Column(String)  # JSON string
+    user_vad_segments_json = Column(String)  # JSON string for VAD-detected segments
     agent_speech_segments_json = Column(String)  # JSON string
     agent_answer_latencies_ms_json = Column(String)  # JSON string
 
@@ -75,6 +87,20 @@ class Transcript(Base):
 
 
 def init_db():
+    # Check if the database exists and if the vad_latency_details_json column is missing
+    inspector = inspect(engine)
+    if "audio_analyses" in inspector.get_table_names():
+        columns = [col["name"] for col in inspector.get_columns("audio_analyses")]
+        
+        # If the new column doesn't exist, recreate the tables
+        if "vad_latency_details_json" not in columns:
+            print("Recreating database with new schema...")
+            Base.metadata.drop_all(bind=engine)
+            Base.metadata.create_all(bind=engine)
+            print("Database schema updated successfully.")
+            return
+    
+    # Otherwise, just create tables normally
     Base.metadata.create_all(bind=engine)
 
 
@@ -90,23 +116,39 @@ def add_analysis(db_session, metrics_data):
     user_windows_json = json.dumps(metrics_data.get("user_windows", []))
     agent_windows_json = json.dumps(metrics_data.get("agent_windows", []))
     agent_latencies_json = json.dumps(metrics_data.get("agent_answer_latencies", []))
+    user_vad_segments_json = json.dumps(metrics_data.get("user_vad_segments", []))
+    vad_latency_details_json = json.dumps(metrics_data.get("vad_latency_details", []))
+    
     latency_metrics = metrics_data.get("latency_metrics", {})
+    vad_latency_metrics = metrics_data.get("vad_latency_metrics", {})
     transcript_data = metrics_data.get("transcript_data")
 
     db_analysis = AudioAnalysis(
         original_filename=metrics_data["filename"],
         downsampled_filepath=metrics_data["downsampled_path"],
         analysis_timestamp=datetime.datetime.now(datetime.timezone.utc),
+        # Legacy latency metrics
         avg_latency_ms=latency_metrics.get("avg_latency"),
         p10_latency_ms=latency_metrics.get("p10_latency"),
         p50_latency_ms=latency_metrics.get("p50_latency"),
         p90_latency_ms=latency_metrics.get("p90_latency"),
+        # VAD-based latency metrics
+        vad_avg_latency=vad_latency_metrics.get("avg_latency"),
+        vad_min_latency=vad_latency_metrics.get("min_latency"),
+        vad_max_latency=vad_latency_metrics.get("max_latency"),
+        vad_p10_latency=vad_latency_metrics.get("p10_latency"),
+        vad_p50_latency=vad_latency_metrics.get("p50_latency"),
+        vad_p90_latency=vad_latency_metrics.get("p90_latency"),
+        vad_latency_details_json=vad_latency_details_json,
+        # Other metrics
         ai_interrupting_user=metrics_data.get("ai_interrupting_user"),
         user_interrupting_ai=metrics_data.get("user_interrupting_ai"),
         talk_ratio=metrics_data.get("talk_ratio"),
         average_pitch_hz=metrics_data.get("average_pitch"),
         words_per_minute=metrics_data.get("words_per_minute"),
+        # Segments
         user_speech_segments_json=user_windows_json,
+        user_vad_segments_json=user_vad_segments_json,
         agent_speech_segments_json=agent_windows_json,
         agent_answer_latencies_ms_json=agent_latencies_json,
     )
@@ -159,15 +201,26 @@ def recreate_metrics_from_db(db_record: AudioAnalysis):
             "p50_latency": db_record.p50_latency_ms,
             "p90_latency": db_record.p90_latency_ms,
         },
+        "vad_latency_metrics": {
+            "avg_latency": db_record.vad_avg_latency,
+            "min_latency": db_record.vad_min_latency,
+            "max_latency": db_record.vad_max_latency,
+            "p10_latency": db_record.vad_p10_latency,
+            "p50_latency": db_record.vad_p50_latency,
+            "p90_latency": db_record.vad_p90_latency,
+        },
+        "vad_latency_details": json.loads(
+            db_record.vad_latency_details_json or "[]"
+        ),
         "agent_answer_latencies": json.loads(
             db_record.agent_answer_latencies_ms_json or "[]"
         ),
         "ai_interrupting_user": db_record.ai_interrupting_user,
-        "user_interrupting_ai": db_record.user_interrupting_ai,
-        "talk_ratio": db_record.talk_ratio,
+        "user_interrupting_ai": db_record.user_interrupting_ai,        "talk_ratio": db_record.talk_ratio,
         "average_pitch": db_record.average_pitch_hz,
         "words_per_minute": db_record.words_per_minute,
         "user_windows": json.loads(db_record.user_speech_segments_json or "[]"),
+        "user_vad_segments": json.loads(db_record.user_vad_segments_json or "[]"),
         "agent_windows": json.loads(db_record.agent_speech_segments_json or "[]"),
         "analysis_timestamp": db_record.analysis_timestamp,
     }

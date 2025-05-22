@@ -1,11 +1,11 @@
-Flask==3.1.0
+elevenlabs==2.0.0
+Flask==3.1.1
 librosa==0.11.0
 matplotlib==3.10.3
-numpy==2.2.5
+numpy==2.2.6
 pydub==0.25.1
+python-dotenv==1.1.0
 scipy==1.15.3
 soundfile==0.13.1
-SQLAlchemy==2.0.30 # Added for database ORM
-elevenlabs==1.58.1 # Added for ElevenLabs Scribe
-ffmpeg-python==0.2.0 # Added for audio channel splitting
-python-dotenv==1.1.0 # Added for .env file support
+SQLAlchemy==2.0.41
+torch==2.7.0

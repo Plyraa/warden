@@ -5,6 +5,8 @@ import soundfile as sf
 from pydub import AudioSegment
 from elevenlabs import ElevenLabs
 import traceback  # Added for error logging
+import torch  # For Silero VAD
+import time     # For timing the VAD processing
 
 # Database imports
 from database import (
@@ -35,6 +37,10 @@ class AudioMetricsCalculator:
             print(
                 "WARNING: ELEVENLABS_API_KEY not found in .env file or environment. Transcription will be skipped."
             )
+
+        # Silero VAD model - will be lazy loaded when needed
+        self.vad_model = None
+        self.sampling_rate = 16000  # Required sample rate for Silero VAD
 
         # Create output directory if it doesn't exist
         if not os.path.exists(output_dir):
@@ -393,49 +399,232 @@ class AudioMetricsCalculator:
 
         return activity_windows
 
-    def calculate_average_latency(self, user_windows, agent_windows):
-        """Calculate the average, p10, p50, and p90 latency between user utterances and agent responses"""
-        latencies = self.calculate_agent_answer_latency(user_windows, agent_windows)
+    def get_vad_model(self):
+        """Lazy load the Silero VAD model to save resources if it's not used"""
+        if self.vad_model is None:
+            print("Loading Silero VAD model...")
+            model, utils = torch.hub.load(
+                repo_or_dir='snakers4/silero-vad',
+                model='silero_vad',
+                force_reload=False
+            )
+            (get_speech_timestamps, _, _, _, _) = utils
+            
+            self.vad_model = model
+            self.get_speech_timestamps = get_speech_timestamps
+            print("Silero VAD model loaded successfully")
+        
+        return self.vad_model, self.get_speech_timestamps
+        
+    def detect_speech_silero_vad(self, audio_channel, sr):
+        """
+        Detect speech segments using Silero VAD for more accurate speech detection
+        
+        Args:
+            audio_channel: Audio data for a single channel
+            sr: Sample rate of the audio
+            
+        Returns:
+            List of (start_time, end_time) tuples for speech segments
+        """
+        start_time = time.time()
+        print("Starting Silero VAD speech detection...")
+        
+        # Resample to 16kHz if needed (Silero VAD requirement)
+        if sr != self.sampling_rate:
+            print(f"Resampling audio from {sr}Hz to {self.sampling_rate}Hz for VAD")
+            audio_channel = librosa.resample(audio_channel, orig_sr=sr, target_sr=self.sampling_rate)
+        
+        # Convert to float32 tensor
+        tensor_audio = torch.FloatTensor(audio_channel)
+        
+        # Get VAD model
+        model, get_speech_timestamps = self.get_vad_model()
+        
+        # Get speech timestamps - more aggressive settings for better accuracy
+        speech_timestamps = get_speech_timestamps(
+            tensor_audio,
+            model,
+            threshold=0.5,  # Higher threshold means more aggressive voice activity detection
+            sampling_rate=self.sampling_rate,
+            min_silence_duration_ms=400,  # Minimum silence duration between speech chunks in ms
+            min_speech_duration_ms=200,   # Minimum speech duration to be detected
+            window_size_samples=512       # Window size for processing
+        )
+        
+        # Print raw Silero VAD timestamps for debugging
+        print(f"Raw Silero VAD timestamps: {speech_timestamps}")
+        
+        # Convert timestamps to seconds
+        speech_segments = []
+        for segment in speech_timestamps:
+            start = segment['start'] / self.sampling_rate
+            end = segment['end'] / self.sampling_rate
+            speech_segments.append((start, end))
+        
+        end_time = time.time()
+        print(f"Silero VAD detected {len(speech_segments)} speech segments in {end_time - start_time:.2f} seconds")
+        
+        return speech_segments    
+    def calculate_turn_taking_latency(self, user_vad_segments, agent_vad_segments):
+        """
+        Calculate turn-taking latency between user utterances and agent responses
+        using VAD for user speech and activity windows for agent.
+        Each user utterance is paired with the next available agent response.
+        Handles AI interruptions by skipping the interrupted user turn and the interrupting AI turn.
+        
+        Args:
+            user_vad_segments: List of {'start': float, 'end': float} for user speech from VAD
+            agent_vad_segments: List of {'start': float, 'end': float} for agent speech from VAD
+            
+        Returns:
+            A tuple containing:
+            - metrics (dict): Dictionary with latency stats and ai_interruptions_handled_in_latency.
+            - latency_details (list): List of detailed latency data for non-interrupted turns.
+        """
+        latencies = []
+        latency_details = []
+        ai_interruptions_handled_in_latency = 0
+
+        if not user_vad_segments or not agent_vad_segments:
+            print("No user VAD segments or agent windows to calculate latency.")
+            return {
+                "avg_latency": 0, "min_latency": 0, "max_latency": 0,
+                "p10_latency": 0, "p50_latency": 0, "p90_latency": 0,
+                "ai_interruptions_handled_in_latency": 0
+            }, []
+        
+        # Ensure segments are sorted by start time
+        user_vad_segments = sorted(user_vad_segments, key=lambda x: float(x['start']))
+        
+        min_agent_speech_duration = 0  # VAD should handle meaningful duration
+        significant_agent_windows = sorted(
+            [w for w in agent_vad_segments if (float(w['end']) - float(w['start'])) >= min_agent_speech_duration],
+            key=lambda x: float(x['start'])
+        )
+
+        if not significant_agent_windows:
+            print("No significant agent windows to calculate latency against.")
+            return {
+                "avg_latency": 0, "min_latency": 0, "max_latency": 0,
+                "p10_latency": 0, "p50_latency": 0, "p90_latency": 0,
+                "ai_interruptions_handled_in_latency": 0
+            }, []
+
+        print(f"Initial counts - User VAD segments: {len(user_vad_segments)}, Significant Agent VAD segments: {len(significant_agent_windows)}")
+
+        current_agent_search_start_idx = 0
+
+        for user_segment in user_vad_segments:
+            user_start = float(user_segment['start'])
+            user_end = float(user_segment['end'])
+            
+            processed_this_user_segment = False
+
+            for agent_search_idx in range(current_agent_search_start_idx, len(significant_agent_windows)):
+                agent_window = significant_agent_windows[agent_search_idx]
+                agent_start = float(agent_window['start'])
+                # agent_end = float(agent_window['end']) # Not needed for this logic step
+
+                # Check for AI interruption: AI starts speaking during the user's current speech segment.
+                if user_start < agent_start < user_end:
+                    ai_interruptions_handled_in_latency += 1
+                    print(f"AI interruption detected and handled for latency: User {user_segment} interrupted by Agent {agent_window}")
+                    # This user segment and this agent window are skipped for latency.
+                    # Advance the agent search index past the interrupting agent window for the next user segment.
+                    current_agent_search_start_idx = agent_search_idx + 1
+                    processed_this_user_segment = True
+                    break # Move to the next user_segment
+
+                # Check for standard latency: AI starts after the user has finished.
+                elif agent_start > user_end:
+                    latency_seconds = agent_start - user_end
+                    # Latency must be positive.
+                    if latency_seconds > 0.001: # Adding a small threshold to avoid zero/negative due to float precision
+                        latencies.append(latency_seconds)
+                        latency_details.append({
+                            "latency_seconds": latency_seconds,
+                            "latency_ms": latency_seconds * 1000,
+                            "start_time": agent_start, 
+                            "user_end": user_end,
+                            "agent_start": agent_start,
+                            "user_turn_details": user_segment,
+                            "agent_turn_details": agent_window,
+                            "rating": self.rate_latency(latency_seconds)
+                        })
+                    # This agent window is now "consumed" as a response.
+                    current_agent_search_start_idx = agent_search_idx + 1
+                    processed_this_user_segment = True
+                    break # Move to the next user_segment
+                
+                # Else (agent_start <= user_start or agent_start == user_end):
+                # This agent window is too early for the current user segment (e.g., started before user)
+                # or started exactly when user ended (zero latency, typically handled by VAD merging or min_latency threshold).
+                # Continue searching for a suitable agent window for the *current* user_segment.
+                # current_agent_search_start_idx is NOT advanced here, as this agent window was not "used".
+                # However, if all subsequent agent windows are also "too early" for this user segment,
+                # this user segment won't get a latency pair.
+                # The crucial part is that current_agent_search_start_idx only advances when an agent window is consumed.
+
+            if not processed_this_user_segment and current_agent_search_start_idx < len(significant_agent_windows):
+                # If the user segment was not processed (no interruption, no response found starting AFTER it),
+                # and there are still agent windows that were earlier than this user segment or started concurrently,
+                # we need to ensure current_agent_search_start_idx is at least at the first agent window
+                # that could potentially respond to the *next* user segment.
+                # This situation arises if all remaining agent windows start before or during the current user segment ends,
+                # but none qualify as an interruption as defined (user_start < agent_start < user_end).
+                # We need to advance current_agent_search_start_idx past those agent windows that definitely won't apply to future user turns
+                # if they occurred before the current user turn ended.
+                temp_advance_idx = current_agent_search_start_idx
+                while temp_advance_idx < len(significant_agent_windows) and \
+                      float(significant_agent_windows[temp_advance_idx]['start']) <= user_end:
+                    temp_advance_idx += 1
+                current_agent_search_start_idx = temp_advance_idx
+
+
+        print(f"Calculated {len(latencies)} turn-taking latencies. Detected and handled {ai_interruptions_handled_in_latency} AI interruptions in latency context.")
 
         if not latencies:
-            return {
-                "avg_latency": 0,
-                "p10_latency": 0,
-                "p50_latency": 0,
-                "p90_latency": 0,
+            latency_stats = {
+                "avg_latency": 0, "min_latency": 0, "max_latency": 0,
+                "p10_latency": 0, "p50_latency": 0, "p90_latency": 0,
             }
+        else:
+            avg_latency = sum(latencies) / len(latencies)
+            min_latency = min(latencies)
+            max_latency = max(latencies)
+            p10_latency = np.percentile(latencies, 10) if len(latencies) >= 10 else min_latency
+            p50_latency = np.percentile(latencies, 50)
+            p90_latency = np.percentile(latencies, 90) if len(latencies) >= 10 else max_latency
+            latency_stats = {
+                "avg_latency": avg_latency, "min_latency": min_latency, "max_latency": max_latency,
+                "p10_latency": p10_latency, "p50_latency": p50_latency, "p90_latency": p90_latency,
+            }
+        
+        latency_stats["ai_interruptions_handled_in_latency"] = ai_interruptions_handled_in_latency
+        
+        return latency_stats, latency_details
 
-        avg_latency = sum(latencies) / len(latencies) * 1000  # convert to ms
-
-        # Calculate percentiles
-        p10_latency = np.percentile(latencies, 10) * 1000
-        p50_latency = np.percentile(latencies, 50) * 1000
-        p90_latency = np.percentile(latencies, 90) * 1000
-
-        return {
-            "avg_latency": avg_latency,
-            "p10_latency": p10_latency,
-            "p50_latency": p50_latency,
-            "p90_latency": p90_latency,
-        }
-
-    def calculate_agent_answer_latency(self, user_windows, agent_windows):
-        """Calculate latency for each agent response after user utterances"""
-        latencies = []
-
-        for user_window in user_windows:
-            user_end = user_window[1]
-
-            # Find the next agent window that starts after this user window ends
-            next_agent_windows = [w for w in agent_windows if w[0] > user_end]
-
-            if next_agent_windows:
-                # Get the closest agent window
-                next_agent = min(next_agent_windows, key=lambda w: w[0])
-                latency = next_agent[0] - user_end
-                latencies.append(latency)
-
-        return latencies
+    def rate_latency(self, latency_seconds):
+        """
+        Rate the latency according to specified thresholds
+        
+        Args:
+            latency_seconds: Latency in seconds
+            
+        Returns:
+            String rating of the latency: Perfect, Good, OK, Bad, Poor
+        """
+        if latency_seconds < 2:
+            return "Perfect"
+        elif latency_seconds < 3:
+            return "Good"
+        elif latency_seconds < 4:
+            return "OK"
+        elif latency_seconds < 5:
+            return "Bad"
+        else:
+            return "Poor"
 
     def detect_ai_interrupting_user(self, user_windows, agent_windows):
         """Check if AI agent interrupts user during conversation, using improved detection logic"""
@@ -444,7 +633,14 @@ class AudioMetricsCalculator:
         min_overlap_duration = 0.15  # Minimum duration of overlap to count
         min_intrusion_ratio = 0.20  # At least 20% overlap to count as significant
 
-        for user_start, user_end in user_windows:
+        for user_turn in user_windows:
+            try:
+                user_start = float(user_turn['start'])
+                user_end = float(user_turn['end'])
+            except (KeyError, TypeError, ValueError) as e:
+                print(f"ERROR: Could not process user_turn: {user_turn}. Error: {e}")
+                continue  # Skip this problematic turn
+
             user_duration = user_end - user_start
 
             # Skip very short utterances that might be noise
@@ -452,13 +648,20 @@ class AudioMetricsCalculator:
                 continue
 
             # Check if any agent window starts while user is speaking (with a buffer)
-            for agent_start, agent_end in agent_windows:
+            for agent_turn in agent_windows:
+                try:
+                    agent_start = float(agent_turn['start'])
+                    agent_end = float(agent_turn['end'])
+                except (KeyError, TypeError, ValueError) as e:
+                    print(f"ERROR: Could not process agent_turn: {agent_turn}. Error: {e}")
+                    continue # Skip this problematic turn
+                
                 # Agent started speaking while user was speaking
                 if (
                     agent_start > user_start
                     and agent_start < user_end - transition_buffer
                 ):
-                    # Calculate how much of the user's speech was interrupted
+                    # Calculate how much of the user\'s speech was interrupted
                     overlap_duration = min(user_end, agent_end) - agent_start
 
                     # Only count as interruption if substantial
@@ -477,7 +680,14 @@ class AudioMetricsCalculator:
         min_overlap_duration = 0.15  # Minimum duration of overlap to count
         min_intrusion_ratio = 0.20  # At least 20% overlap to count as significant
 
-        for agent_start, agent_end in agent_windows:
+        for agent_turn in agent_windows:
+            try:
+                agent_start = float(agent_turn['start'])
+                agent_end = float(agent_turn['end'])
+            except (KeyError, TypeError, ValueError) as e:
+                print(f"ERROR: Could not process agent_turn: {agent_turn}. Error: {e}")
+                continue # Skip this problematic turn
+
             agent_duration = agent_end - agent_start
 
             # Skip very short utterances that might be noise
@@ -485,7 +695,14 @@ class AudioMetricsCalculator:
                 continue
 
             # Check if any user window starts while agent is speaking (with a buffer)
-            for user_start, user_end in user_windows:
+            for user_turn in user_windows:
+                try:
+                    user_start = float(user_turn['start'])
+                    user_end = float(user_turn['end'])
+                except (KeyError, TypeError, ValueError) as e:
+                    print(f"ERROR: Could not process user_turn: {user_turn}. Error: {e}")
+                    continue # Skip this problematic turn
+
                 # User started speaking while agent was speaking
                 if (
                     user_start > agent_start
@@ -505,8 +722,12 @@ class AudioMetricsCalculator:
 
     def calculate_talk_ratio(self, user_windows, agent_windows):
         """Calculate ratio of agent speaking time to user speaking time"""
-        user_duration = sum(end - start for start, end in user_windows)
-        agent_duration = sum(end - start for start, end in agent_windows)
+        try:
+            user_duration = sum(float(turn['end']) - float(turn['start']) for turn in user_windows)
+            agent_duration = sum(float(turn['end']) - float(turn['start']) for turn in agent_windows)
+        except (KeyError, TypeError, ValueError) as e:
+            print(f"ERROR: Could not calculate durations in calculate_talk_ratio. User: {user_windows}, Agent: {agent_windows}. Error: {e}")
+            return float("inf") # Or handle error appropriately
 
         if user_duration == 0:
             return float("inf")  # Avoid division by zero
@@ -539,13 +760,20 @@ class AudioMetricsCalculator:
         since actual speech-to-text would be more complex.
         """
         agent_audio = audio[1]
-
         # Extract audio segments where agent is speaking
         agent_speech = []
-        for start, end in agent_windows:
-            start_idx = int(start * sr)
-            end_idx = int(end * sr)
-            agent_speech.extend(agent_audio[start_idx:end_idx])
+        total_speaking_time_seconds = 0
+        for turn in agent_windows:
+            try:
+                start = float(turn['start'])
+                end = float(turn['end'])
+                total_speaking_time_seconds += (end - start)
+                start_idx = int(start * sr)
+                end_idx = int(end * sr)
+                agent_speech.extend(agent_audio[start_idx:end_idx])
+            except (KeyError, TypeError, ValueError) as e:
+                print(f"ERROR: Could not process turn in calculate_words_per_minute: {turn}. Error: {e}")
+                continue
 
         if not agent_speech:
             return 0
@@ -573,15 +801,15 @@ class AudioMetricsCalculator:
         word_count = syllable_count / 1.5
 
         # Calculate total agent speaking time in minutes
-        total_speaking_time = sum(end - start for start, end in agent_windows) / 60
+        total_speaking_time_minutes = total_speaking_time_seconds / 60
 
-        if total_speaking_time > 0:
-            return word_count / total_speaking_time
+        if total_speaking_time_minutes > 0:
+            return word_count / total_speaking_time_minutes
         else:
             return 0
 
     def _generate_placeholder_transcript_from_segments(
-        self, user_windows, agent_windows
+        self, user_vad_segments, agent_vad_segments
     ):
         """
         Generate a placeholder transcript from speech segments when actual transcript is not available.
@@ -598,7 +826,7 @@ class AudioMetricsCalculator:
         words_agent = []
 
         # Create word-level data from speech segments with estimated word positions
-        for i, (start, end) in enumerate(user_windows):
+        for i, (start, end) in enumerate(user_vad_segments):
             # Create a simple placeholder word for each segment
             duration = end - start
             word_count = max(
@@ -619,7 +847,7 @@ class AudioMetricsCalculator:
                     }
                 )
 
-        for i, (start, end) in enumerate(agent_windows):
+        for i, (start, end) in enumerate(agent_vad_segments):
             # Create a simple placeholder word for each segment
             duration = end - start
             word_count = max(
@@ -652,8 +880,8 @@ class AudioMetricsCalculator:
         dialog_parts = []
 
         # Sort segments by start time to get conversation flow
-        all_segments = [(start, end, "CUSTOMER") for start, end in user_windows] + [
-            (start, end, "AI_AGENT") for start, end in agent_windows
+        all_segments = [(start, end, "CUSTOMER") for start, end in user_vad_segments] + [
+            (start, end, "AI_AGENT") for start, end in agent_vad_segments
         ]
         all_segments.sort(key=lambda x: x[0])  # Sort by start time
 
@@ -670,6 +898,69 @@ class AudioMetricsCalculator:
 
         return transcript_data
 
+    def _create_combined_speaker_turns(self, raw_user_segments, raw_agent_segments): # Removed max_merge_gap
+        """
+        Combines and merges VAD segments for user and agent into a single timeline of speaker turns.
+        Segments are merged if they are from the same speaker and are continuous or overlapping.
+        The final list of turns is sorted by start time.
+
+        Args:
+            raw_user_segments: List of (start, end) tuples for user VAD.
+            raw_agent_segments: List of (start, end) tuples for agent VAD.
+
+        Returns:
+            A list of dictionaries, where each dictionary is a turn with
+            {'speaker': 'user'/'ai_agent', 'start': float, 'end': float}, sorted by start time.
+        """
+        tagged_segments = []
+        # Ensure segments are actual tuples/lists of two numbers before processing
+        for seg in raw_user_segments:
+            if isinstance(seg, (list, tuple)) and len(seg) == 2:
+                tagged_segments.append({'speaker': 'user', 'start': seg[0], 'end': seg[1]})
+            else:
+                print(f"Warning: Skipping invalid user segment: {seg}")
+        for seg in raw_agent_segments:
+            if isinstance(seg, (list, tuple)) and len(seg) == 2:
+                tagged_segments.append({'speaker': 'ai_agent', 'start': seg[0], 'end': seg[1]})
+            else:
+                print(f"Warning: Skipping invalid agent segment: {seg}")
+
+        if not tagged_segments:
+            return []
+
+        # Sort all segments by start time to process them chronologically
+        tagged_segments.sort(key=lambda x: x['end'])
+        print(f"DEBUG: Sorted segments: {tagged_segments}")
+        merged_turns = []
+        if not tagged_segments: # Should be caught by the check above, but good for safety
+            return merged_turns
+
+        # Initialize with the first segment
+        merged_turns.append(tagged_segments[0].copy())
+
+        for i in range(1, len(tagged_segments)):
+            current_segment = tagged_segments[i]
+            last_merged_turn = merged_turns[-1]
+
+            # Check if the current segment can be merged with the last merged turn:
+            # 1. Same speaker
+            # 2. Current segment starts at or before the last merged turn ends (continuous or overlapping)
+            if current_segment['speaker'] == last_merged_turn['speaker']:
+                # Merge: extend the end time of the last_merged_turn
+                print(f"Merging segments: {last_merged_turn} with {current_segment}")
+                last_merged_turn['end'] = max(last_merged_turn['end'], current_segment['end'])
+            else:
+                # Different speaker or a gap, so start a new turn
+                merged_turns.append(current_segment.copy())
+
+        merged_turns.sort(key=lambda x: x['start'])  # Sort by start time
+        # Pretty print the merged turns for debugging
+        for turn in merged_turns:
+            print(f"DEBUG: Merged turn: {turn}")
+        # The merged_turns list is already sorted by start time due to the initial sort and processing order.
+        print(f"Combined {len(raw_user_segments) + len(raw_agent_segments)} raw segments into {len(merged_turns)} merged speaker turns.")
+        return merged_turns
+
     def process_file(self, filename):
         """Process a single audio file and calculate all metrics.
         Checks database first, if found, returns stored metrics.
@@ -683,62 +974,72 @@ class AudioMetricsCalculator:
                     f"Found existing analysis for {filename} in database. Returning stored data."
                 )
                 metrics = recreate_metrics_from_db(existing_analysis_db)
-                _audio, _sr, _output_path = self.downsample_audio(filename)
+                # Ensure downsampled path is available, even if loading from DB
+                _audio, _sr, _output_path = self.downsample_audio(filename) # audio and sr not used here
                 metrics["downsampled_path"] = _output_path
 
-                # Check if we need to generate transcript data
-                if not metrics.get("transcript_data") and self.elevenlabs_client:
-                    # Check if we have speech segments that can be used instead of calling the API
-                    user_windows = metrics.get("user_windows", [])
-                    agent_windows = metrics.get("agent_windows", [])
 
-                    if user_windows and agent_windows:
+                # If loading from DB, we might need to regenerate placeholder from new VAD segments if they exist
+                # This part assumes that if 'user_vad_segments' and 'agent_vad_segments' are in metrics,
+                # they are the ones to be used.
+                user_speech_turns_for_placeholder = metrics.get("user_vad_segments", [])
+                agent_speech_turns_for_placeholder = metrics.get("agent_vad_segments", [])
+                
+                # Convert to list of tuples if they are list of dicts, for _generate_placeholder_transcript_from_segments
+                if user_speech_turns_for_placeholder and isinstance(user_speech_turns_for_placeholder[0], dict):
+                    user_speech_turns_for_placeholder = [(t['start'], t['end']) for t in user_speech_turns_for_placeholder]
+                if agent_speech_turns_for_placeholder and isinstance(agent_speech_turns_for_placeholder[0], dict):
+                    agent_speech_turns_for_placeholder = [(t['start'], t['end']) for t in agent_speech_turns_for_placeholder]
+
+
+                if not metrics.get("transcript_data") and self.elevenlabs_client is None: # Only if no EL and no transcript
+                    if user_speech_turns_for_placeholder or agent_speech_turns_for_placeholder:
                         print(
-                            f"Found speech segments for {filename} in database. Generating transcript from existing segments."
+                            f"Generating placeholder transcript from VAD segments for {filename} (from DB)."
                         )
-                        # Create mock transcript data from speech segments without calling ElevenLabs API
                         transcript_data = (
                             self._generate_placeholder_transcript_from_segments(
-                                user_windows, agent_windows
+                                user_speech_turns_for_placeholder, agent_speech_turns_for_placeholder
                             )
                         )
                         metrics["transcript_data"] = transcript_data
+                elif not metrics.get("transcript_data") and self.elevenlabs_client:
+                     # Attempt to get transcript if EL client available and no transcript in DB
+                    print(
+                        f"Transcript data missing for {filename} (from DB), attempting to generate from audio."
+                    )
+                    original_file_path = os.path.join(self.input_dir, filename)
+                    transcript_data = self._get_transcript_for_file(
+                        original_file_path
+                    )
+                    if transcript_data:
+                        metrics["transcript_data"] = transcript_data
                         print(
-                            f"Generated placeholder transcript from speech segments for {filename}."
+                            f"Generated transcript for {filename} (was missing from DB)."
                         )
                     else:
-                        # No segments available, attempt transcription if client is available
-                        print(
-                            f"Transcript data missing for {filename}, attempting to generate from audio."
-                        )
-                        original_file_path = os.path.join(self.input_dir, filename)
-                        transcript_data = self._get_transcript_for_file(
-                            original_file_path
-                        )
-                        if transcript_data:
-                            metrics["transcript_data"] = transcript_data
+                        # Fallback to placeholder if EL fails
+                        if user_speech_turns_for_placeholder or agent_speech_turns_for_placeholder:
                             print(
-                                f"Generated transcript for {filename} (was missing from DB)."
+                                f"EL transcription failed for {filename} (from DB), generating placeholder."
                             )
+                            transcript_data = (
+                                self._generate_placeholder_transcript_from_segments(
+                                    user_speech_turns_for_placeholder, agent_speech_turns_for_placeholder
+                                )
+                            )
+                            metrics["transcript_data"] = transcript_data
                         else:
                             print(
-                                f"Failed to generate missing transcript for {filename}."
+                                f"Failed to generate missing transcript for {filename} and no VAD segments for placeholder."
                             )
-
                 return metrics
 
             print(f"No existing analysis for {filename} in database. Processing anew.")
             # Downsample audio file (this also handles existing downsampled files)
             audio, sr, output_path = self.downsample_audio(filename)
 
-            # Get activity windows for both channels
-            activity_windows = self.calculate_activity_windows(audio, sr)
-
-            # Right channel (index 1) is AI agent, Left channel (index 0) is user
-            user_windows = activity_windows[0]  # Left channel
-            agent_windows = activity_windows[1]  # Right channel
-
-            # Get transcript with improved overlap handling
+            # Get transcript with improved overlap handling (if ElevenLabs client is available)
             transcript_data = None
             if self.elevenlabs_client:
                 original_file_path = os.path.join(self.input_dir, filename)
@@ -755,35 +1056,76 @@ class AudioMetricsCalculator:
                 print(
                     f"Skipping transcription for {filename} (ElevenLabs client not configured)."
                 )
+            
+            # Process user channel with Silero VAD for more accurate speech detection
+            print("Processing user channel with Silero VAD...")
+            raw_user_vad_segments = self.detect_speech_silero_vad(audio[0], sr)
+            
+            # Process agent channel with Silero VAD
+            print("Processing agent channel with Silero VAD...")
+            raw_agent_vad_segments = self.detect_speech_silero_vad(audio[1], sr)
+            
+            # Create combined and merged speaker turns
+            print("Creating combined speaker turns...")
+            combined_speaker_turns = self._create_combined_speaker_turns(raw_user_vad_segments, raw_agent_vad_segments)
+            
+            # Extract merged turns for each speaker for subsequent calculations
+            user_speech_turns = [{'start': float(turn['start']), 'end': float(turn['end'])} for turn in combined_speaker_turns if turn['speaker'] == 'user']
+            agent_speech_turns = [{'start': float(turn['start']), 'end': float(turn['end'])} for turn in combined_speaker_turns if turn['speaker'] == 'ai_agent']
+            
+            print(f"Combined into {len(user_speech_turns)} user turns and {len(agent_speech_turns)} agent turns.")
+
+            # Calculate VAD-based turn-taking latency metrics using merged turns (Agent_Start - User_End)
+            vad_latency_metrics, vad_latency_details = self.calculate_turn_taking_latency(
+                user_speech_turns, 
+                agent_speech_turns 
+            )
+            # vad_latency_metrics now includes 'ai_interruptions_handled_in_latency'
 
             # Calculate metrics
             metrics = {
                 "filename": filename,
                 "downsampled_path": output_path,
-                "latency_metrics": self.calculate_average_latency(
-                    user_windows, agent_windows
-                ),
-                "agent_answer_latencies": [
-                    lat * 1000
-                    for lat in self.calculate_agent_answer_latency(
-                        user_windows, agent_windows
-                    )
-                ],  # ms
+                "combined_speaker_turns": combined_speaker_turns, # Store the combined turns
+                # Use merged turns for all relevant metrics
+                "user_vad_segments": user_speech_turns, 
+                "agent_vad_segments": agent_speech_turns,
+                
+                # New VAD-based latency metrics (Agent VAD Start - User VAD End)
+                "vad_latency_metrics": vad_latency_metrics,
+                "vad_latency_details": vad_latency_details,
+                # Other metrics (now also VAD-based for agent, using merged turns)
                 "ai_interrupting_user": self.detect_ai_interrupting_user(
-                    user_windows, agent_windows
+                    user_speech_turns, agent_speech_turns
                 ),
                 "user_interrupting_ai": self.detect_user_interrupting_ai(
-                    user_windows, agent_windows
+                    user_speech_turns, agent_speech_turns
                 ),
-                "talk_ratio": self.calculate_talk_ratio(user_windows, agent_windows),
-                "average_pitch": self.calculate_average_pitch(audio, sr),
+                "talk_ratio": self.calculate_talk_ratio(user_speech_turns, agent_speech_turns),
+                "average_pitch": self.calculate_average_pitch(audio, sr), # Pitch still uses raw audio
                 "words_per_minute": self.calculate_words_per_minute(
-                    audio, sr, agent_windows
+                    audio, sr, agent_speech_turns 
                 ),
-                "user_windows": user_windows,
-                "agent_windows": agent_windows,
-                "transcript_data": transcript_data,  # Add enhanced transcript data here
+                "transcript_data": transcript_data, 
             }
+
+            # If placeholder transcript generation is needed (e.g. EL failed or not used)
+            if not metrics["transcript_data"] and (user_speech_turns or agent_speech_turns):
+                 print(f"Generating placeholder transcript using merged VAD-based speaker turns for {filename}")
+                 # _generate_placeholder_transcript_from_segments expects lists of (start,end) tuples
+                 # user_speech_turns and agent_speech_turns are lists of dicts {'start':s, 'end':e}
+                 # So, convert them back for this specific function if its signature is not changed.
+                 # OR, update _generate_placeholder_transcript_from_segments to accept list of dicts.
+                 # For now, let's assume _generate_placeholder_transcript_from_segments is flexible or we adapt.
+                 # Let's adapt the call to match its expected (start,end) tuple list format:
+                 user_tuples_for_placeholder = [(turn['start'], turn['end']) for turn in user_speech_turns]
+                 agent_tuples_for_placeholder = [(turn['start'], turn['end']) for turn in agent_speech_turns]
+                 
+                 placeholder_transcript = self._generate_placeholder_transcript_from_segments(
+                     user_tuples_for_placeholder, agent_tuples_for_placeholder
+                 )
+                 metrics["transcript_data"] = placeholder_transcript
+
 
             # Add new analysis to database
             add_analysis(db_session, metrics)

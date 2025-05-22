@@ -12,14 +12,14 @@ class AudioVisualizer:
         pass
 
     def generate_channel_activity_plot(
-        self, user_windows, agent_windows, duration, filename=""
+        self, merged_turns, duration, filename=""
     ):
         """
-        Generate a horizontal timeline showing user and agent activity
+        Generate a horizontal timeline showing user and agent activity based on merged_turns.
 
         Args:
-            user_windows: List of (start_time, end_time) tuples for user channel
-            agent_windows: List of (start_time, end_time) tuples for agent channel
+            merged_turns: List of dictionaries, where each dictionary is a turn with
+                          {'speaker': 'user'/'ai_agent', 'start': float, 'end': float}.
             duration: Total duration of the audio in seconds
             filename: Name of the file being visualized
 
@@ -32,22 +32,31 @@ class AudioVisualizer:
         ax.set_xlim(0, duration)
         ax.set_ylim(0, 3)
         ax.set_yticks([1, 2])
-        ax.set_yticklabels(["User (L)", "AI Agent (R)"])
+        ax.set_yticklabels(["User", "AI Agent"]) # Simplified labels
         ax.set_xlabel("Time (seconds)")
-        ax.set_title(f"Channel Activity for {filename}")
+        ax.set_title(f"Conversation Timeline for {filename}")
         ax.grid(axis="x", linestyle="--", alpha=0.7)
 
-        # Plot user activity (bottom row)
-        for start, end in user_windows:
-            ax.add_patch(
-                plt.Rectangle((start, 0.9), end - start, 0.2, color="blue", alpha=0.7)
-            )
+        # Plot turns from merged_turns
+        for turn in merged_turns:
+            try:
+                start = float(turn["start"])
+                end = float(turn["end"])
+                speaker = turn["speaker"]
 
-        # Plot agent activity (top row)
-        for start, end in agent_windows:
-            ax.add_patch(
-                plt.Rectangle((start, 1.9), end - start, 0.2, color="green", alpha=0.7)
-            )
+                if speaker == "user":
+                    ax.add_patch(
+                        plt.Rectangle((start, 0.9), end - start, 0.2, color="blue", alpha=0.7)
+                    )
+                elif speaker == "ai_agent":
+                    ax.add_patch(
+                        plt.Rectangle((start, 1.9), end - start, 0.2, color="green", alpha=0.7)
+                    )
+            except (KeyError, TypeError, ValueError) as e:
+                print(
+                    f"ERROR: Could not process turn in generate_channel_activity_plot: {turn}. Error: {e}"
+                )
+                continue
 
         # Save plot to a BytesIO object
         buf = BytesIO()
@@ -172,6 +181,118 @@ class AudioVisualizer:
 
         return img_data
 
+    def generate_vad_latency_timeline(self, latency_details, duration, filename=""):
+        """
+        Generate a visualization of all latency measurements throughout the conversation
+
+        Args:
+            latency_details: List of latency detail dictionaries
+            duration: Total duration of the audio in seconds
+            filename: Optional filename for the title
+
+        Returns:
+            Base64 encoded image data
+        """
+        if not latency_details:
+            # Create an empty plot if no data
+            fig, ax = plt.subplots(figsize=(12, 6))
+            ax.text(
+                0.5,
+                0.5,
+                "No VAD latency data available",
+                horizontalalignment="center",
+                verticalalignment="center",
+                transform=ax.transAxes,
+                fontsize=14,
+            )
+        else:
+            fig, ax = plt.subplots(figsize=(12, 6))
+
+            # Extract data - use agent_start for x-axis to show when responses occurred
+            start_times = [item["agent_start"] for item in latency_details]
+            latencies = [item["latency_seconds"] for item in latency_details]
+            ratings = [item["rating"] for item in latency_details]
+            
+            # Number each response for clarity
+            response_numbers = list(range(1, len(latency_details) + 1))
+
+            # Define colors for different ratings
+            rating_colors = {
+                "Perfect": "#28a745",  # Green
+                "Good": "#5cb85c",  # Light green
+                "OK": "#ffc107",  # Yellow
+                "Bad": "#f0ad4e",  # Orange
+                "Poor": "#dc3545",  # Red
+            }
+
+            # Plot latency points
+            scatter = ax.scatter(
+                start_times,
+                latencies,
+                c=[rating_colors.get(rating, "#007bff") for rating in ratings],
+                s=100,  # Point size
+                alpha=0.8,
+                edgecolors="black",
+                zorder=3,
+            )
+
+            # Add horizontal lines for thresholds
+            thresholds = [(2, "Perfect"), (3, "Good"), (4, "OK"), (5, "Bad")]
+            for threshold, label in thresholds:
+                ax.axhline(
+                    y=threshold,
+                    linestyle="--",
+                    alpha=0.7,
+                    color=rating_colors.get(label, "gray"),
+                    label=f"{label} threshold ({threshold}s)",
+                    zorder=2,
+                )
+
+            # Set labels and title
+            title = f"VAD-based Turn-taking Latency Timeline"
+            if filename:
+                title += f" - {filename}"
+            ax.set_title(title)
+            ax.set_xlabel("Conversation Time (seconds)")
+            ax.set_ylabel("Response Latency (seconds)")
+
+            # Set x-axis to show the full conversation duration
+            ax.set_xlim(0, duration)
+
+            # Set y-axis to show a bit more than the maximum latency or at least up to 6 seconds
+            y_max = max(6, max(latencies) * 1.1) if latencies else 6
+            ax.set_ylim(0, y_max)
+
+            # Add grid
+            ax.grid(True, alpha=0.3, zorder=1)
+
+            # Add legend
+            ax.legend(loc="upper right")
+
+            # Add annotations for each point showing response number and latency
+            for i, (x, y, rating, resp_num) in enumerate(zip(start_times, latencies, ratings, response_numbers)):
+                ax.annotate(
+                    f"#{resp_num}: {y:.1f}s",
+                    (x, y),
+                    textcoords="offset points",
+                    xytext=(0, 10),
+                    ha="center",
+                    fontsize=9,
+                    bbox=dict(boxstyle="round,pad=0.3", fc="white", alpha=0.8),
+                )
+
+        # Save plot to a BytesIO object
+        buf = BytesIO()
+        plt.tight_layout()
+        plt.savefig(buf, format="png", dpi=100)
+        buf.seek(0)
+        plt.close(fig)
+
+        # Encode the image as base64
+        img_data = base64.b64encode(buf.getbuffer()).decode("ascii")
+
+        return img_data
+
     def generate_metrics_table_html(self, metrics):
         """
         Generate HTML for metrics table
@@ -182,69 +303,150 @@ class AudioVisualizer:
         Returns:
             HTML string for metrics table
         """
-        latency_metrics = metrics["latency_metrics"]
+        vad_latency_metrics = metrics.get("vad_latency_metrics", {})
+
+        # Check if we have VAD metrics
+        has_vad_metrics = (
+            vad_latency_metrics and all(value is not None for value in vad_latency_metrics.values())
+        )
+
+        # Function to get latency rating based on seconds
+        def get_latency_rating(seconds):
+            if seconds < 2:
+                return "Perfect"
+            elif seconds < 3:
+                return "Good"
+            elif seconds < 4:
+                return "OK"
+            elif seconds < 5:
+                return "Bad"
+            else:
+                return "Poor"
+
+        # Function to get color class based on rating
+        def get_rating_color_class(rating):
+            if rating == "Perfect":
+                return "rating-perfect"
+            elif rating == "Good":
+                return "rating-good"
+            elif rating == "OK":
+                return "rating-ok"
+            elif rating == "Bad":
+                return "rating-bad"
+            else:
+                return "rating-poor"
+
+        # Rating for average latency
+        avg_rating = get_latency_rating(
+            vad_latency_metrics.get("avg_latency", 0) if has_vad_metrics else 0
+        )
+        avg_color_class = get_rating_color_class(avg_rating)
 
         html = """
         <div class="metrics-container">
             <h3>Audio Analysis Metrics</h3>
-            <table class="metrics-table">
-                <tr>
-                    <th>Metric</th>
-                    <th>Value</th>
-                    <th>Description</th>
-                </tr>
-                <tr>
-                    <td>Average Latency</td>
-                    <td>{:.2f} ms</td>
-                    <td>Average response latency for AI agent</td>
-                </tr>
-                <tr>
-                    <td>P10 Latency</td>
-                    <td>{:.2f} ms</td>
-                    <td>10th percentile response latency</td>
-                </tr>
-                <tr>
-                    <td>P50 Latency (Median)</td>
-                    <td>{:.2f} ms</td>
-                    <td>50th percentile response latency</td>
-                </tr>
-                <tr>
-                    <td>P90 Latency</td>
-                    <td>{:.2f} ms</td>
-                    <td>90th percentile response latency</td>
-                </tr>
-                <tr>
-                    <td>AI Interrupting User</td>
-                    <td>{}</td>
-                    <td>Whether AI interrupted the user</td>
-                </tr>
-                <tr>
-                    <td>User Interrupting AI</td>
-                    <td>{}</td>
-                    <td>Whether user interrupted the AI</td>
-                </tr>
-                <tr>
-                    <td>Talk Ratio (Agent/User)</td>
-                    <td>{:.2f}</td>
-                    <td>Ratio of AI agent speaking time to user speaking time</td>
-                </tr>
-                <tr>
-                    <td>Average Pitch</td>
-                    <td>{:.2f} Hz</td>
-                    <td>Average pitch of AI agent's voice</td>
-                </tr>
-                <tr>
-                    <td>Words Per Minute</td>
-                    <td>{:.2f} WPM</td>
-                    <td>Estimated speech speed of AI agent</td>
-                </tr>
-            </table>
+            <style>
+                .rating-perfect {{ color: #28a745; font-weight: bold; }}
+                .rating-good {{ color: #5cb85c; font-weight: bold; }}
+                .rating-ok {{ color: #ffc107; font-weight: bold; }}
+                .rating-bad {{ color: #f0ad4e; font-weight: bold; }}
+                .rating-poor {{ color: #dc3545; font-weight: bold; }}
+                .metrics-section {{ margin-top: 20px; }}
+            </style>
+
+            <div class="metrics-section">
+                <h4>VAD-based Turn-Taking Latency (AI Start - User End)</h4>
+                <table class="metrics-table">
+                    <tr>
+                        <th>Metric</th>
+                        <th>Value</th>
+                        <th>Description</th>
+                    </tr>
+                    <tr>
+                        <td>Average Latency</td>
+                        <td>{:.2f} s <span class="{}">({} rating)</span></td>
+                        <td>Average response latency for AI agent (interrupted turns excluded)</td>
+                    </tr>
+                    <tr>
+                        <td>Min Latency</td>
+                        <td>{:.2f} s</td>
+                        <td>Minimum response latency (interrupted turns excluded)</td>
+                    </tr>
+                    <tr>
+                        <td>Max Latency</td>
+                        <td>{:.2f} s</td>
+                        <td>Maximum response latency (interrupted turns excluded)</td>
+                    </tr>
+                    <tr>
+                        <td>P10 Latency</td>
+                        <td>{:.2f} s</td>
+                        <td>10th percentile response latency (interrupted turns excluded)</td>
+                    </tr>
+                    <tr>
+                        <td>P50 Latency (Median)</td>
+                        <td>{:.2f} s</td>
+                        <td>50th percentile response latency (interrupted turns excluded)</td>
+                    </tr>
+                    <tr>
+                        <td>P90 Latency</td>
+                        <td>{:.2f} s</td>
+                        <td>90th percentile response latency (interrupted turns excluded)</td>
+                    </tr>
+                    <tr>
+                        <td>AI Interruptions Handled</td>
+                        <td>{}</td>
+                        <td>Number of AI interruptions skipped for latency calculation</td>
+                    </tr>
+                </table>
+            </div>
+
+            <div class="metrics-section">
+                <h4>Other Metrics</h4>
+                <table class="metrics-table">
+                    <tr>
+                        <th>Metric</th>
+                        <th>Value</th>
+                        <th>Description</th>
+                    </tr>
+                    <tr>
+                        <td>AI Interrupting User</td>
+                        <td>{}</td>
+                        <td>Whether AI interrupted the user</td>
+                    </tr>
+                    <tr>
+                        <td>User Interrupting AI</td>
+                        <td>{}</td>
+                        <td>Whether user interrupted the AI</td>
+                    </tr>
+                    <tr>
+                        <td>Talk Ratio (Agent/User)</td>
+                        <td>{:.2f}</td>
+                        <td>Ratio of AI agent speaking time to user speaking time</td>
+                    </tr>
+                    <tr>
+                        <td>Average Pitch</td>
+                        <td>{:.2f} Hz</td>
+                        <td>Average pitch of AI agent's voice</td>
+                    </tr>
+                    <tr>
+                        <td>Words Per Minute</td>
+                        <td>{:.2f} WPM</td>
+                        <td>Estimated speech speed of AI agent</td>
+                    </tr>
+                </table>            </div>
         </div>
         """.format(
-            latency_metrics["avg_latency"],
-            latency_metrics["p10_latency"],
-            latency_metrics["p50_latency"],
-            latency_metrics["p90_latency"],
+            # VAD metrics
+            vad_latency_metrics.get("avg_latency", 0) if has_vad_metrics else 0,
+            avg_color_class,
+            avg_rating,
+            vad_latency_metrics.get("min_latency", 0) if has_vad_metrics else 0,
+            vad_latency_metrics.get("max_latency", 0) if has_vad_metrics else 0,
+            vad_latency_metrics.get("p10_latency", 0) if has_vad_metrics else 0,
+            vad_latency_metrics.get("p50_latency", 0) if has_vad_metrics else 0,
+            vad_latency_metrics.get("p90_latency", 0) if has_vad_metrics else 0,
+            vad_latency_metrics.get("ai_interruptions_handled_in_latency", 0) if has_vad_metrics else 0, # New metric
+            # Other metrics
             "Yes" if metrics["ai_interrupting_user"] else "No",
             "Yes" if metrics["user_interrupting_ai"] else "No",
             metrics["talk_ratio"],
@@ -266,10 +468,8 @@ class AudioVisualizer:
             Dictionary with visualization components
         """
         # Extract necessary data
-        user_windows = metrics["user_windows"]
-        agent_windows = metrics["agent_windows"]
+        merged_turns = metrics.get("combined_speaker_turns", []) # Use merged_turns for the timeline
         filename = metrics["filename"]
-        latencies = metrics["agent_answer_latencies"]
 
         transcript_data = metrics.get("transcript_data")
         transcript_dialog = "Transcript not available."
@@ -282,39 +482,49 @@ class AudioVisualizer:
 
         # Generate visualizations
         timeline_img = self.generate_channel_activity_plot(
-            user_windows, agent_windows, duration, filename
+            merged_turns, duration, filename # Use merged_turns now
         )
 
         waveform_img = self.generate_waveform_plot(
-            audio_path, user_windows, agent_windows
+            audio_path, 
+            metrics.get("user_vad_segments", []), # Still need separated segments for waveform highlights
+            metrics.get("agent_vad_segments", []) # Still need separated segments for waveform highlights
         )
-
-        latency_hist_img = self.generate_latency_histogram(latencies)
 
         metrics_table = self.generate_metrics_table_html(metrics)
 
         # Generate speech overlap visualization if transcript data is available
         speech_overlap_img = self.generate_speech_overlap_visualization(
-            transcript_data, duration, filename
+            transcript_data, 
+            metrics.get("user_vad_segments", []), 
+            metrics.get("agent_vad_segments", []), 
+            duration, 
+            filename
         )
+        
+        # Generate VAD latency timeline (AI Start - User End)
+        vad_latency_details = metrics.get("vad_latency_details", [])
+        vad_latency_img = self.generate_vad_latency_timeline(vad_latency_details, duration, filename)
 
         return {
-            "timeline_img": timeline_img,
+            "timelineImage": timeline_img,
             "waveform_img": waveform_img,
-            "latency_hist_img": latency_hist_img,
             "speech_overlap_img": speech_overlap_img,
             "metrics_table": metrics_table,
+            "vad_latency_img": vad_latency_img,
             "filename": filename,
             "transcript_dialog": transcript_dialog,
         }
 
     def generate_speech_overlap_visualization(
-        self, transcript_data, duration, filename=""
+        self, transcript_data, user_windows, agent_windows, duration, filename=""
     ):
         """Generate a visualization showing speech overlaps between user and agent.
 
         Args:
             transcript_data: Transcript data dictionary with words and overlap info
+            user_windows: List of (start_time, end_time) tuples for user channel
+            agent_windows: List of (start_time, end_time) tuples for agent channel
             duration: Total duration of the audio in seconds
             filename: Name of the file being visualized
 

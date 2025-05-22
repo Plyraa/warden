@@ -232,6 +232,11 @@
                     <p>This timeline shows when the user (left channel) and AI agent (right channel) were speaking during the call.</p>
                     <img id="timelineImage" class="visualization-image" src="" alt="Timeline visualization">
                 </div>
+                  <div class="visualization-section">
+                    <h2>Turn-taking Latency Analysis</h2>
+                    <p>This visualization shows the latency between user utterances and AI responses, with color-coded ratings.</p>
+                    <img id="vadLatencyImage" class="visualization-image" src="" alt="VAD latency visualization">
+                </div>
                 
                 <div class="visualization-section">
                     <h2>Speech Overlap Analysis</h2>
@@ -304,11 +309,11 @@
                     document.getElementById('audioElement').src = `/audio/${audioFile}`;
                     document.getElementById('audioPlayer').style.display = 'block';
                     
-                    // Update images
-                    document.getElementById('timelineImage').src = `data:image/png;base64,${data.timeline_img}`;
+                    // Update images                    document.getElementById('timelineImage').src = `data:image/png;base64,${data.timeline_img}`;
                     document.getElementById('waveformImage').src = `data:image/png;base64,${data.waveform_img}`;
                     document.getElementById('latencyHistImage').src = `data:image/png;base64,${data.latency_hist_img}`;
                     document.getElementById('speechOverlapImage').src = `data:image/png;base64,${data.speech_overlap_img}`;
+                    document.getElementById('vadLatencyImage').src = `data:image/png;base64,${data.vad_latency_img}`;
                     
                     // Update metrics table
                     document.getElementById('metricsTable').innerHTML = data.metrics_table;
@@ -377,8 +382,7 @@
                         
                         const speakerLabel = document.createElement('span');
                         speakerLabel.classList.add('speaker-label');
-                        
-                        const speakerName = document.createElement('strong');
+                          const speakerName = document.createElement('strong');
                         speakerName.textContent = speaker === 'customer' ? 'Customer' : 'AI Agent';
                         speakerLabel.appendChild(speakerName);
 
@@ -393,6 +397,29 @@
                         timeLink.style.marginLeft = '5px';
                         timeLink.style.color = '#007bff'; // Bootstrap link blue
                         timeLink.title = 'Click to play from this time';
+                        
+                        // Add latency information for AI agent messages
+                        if (speaker === 'ai_agent' && wordData.latency_info) {
+                            const latencyInfo = document.createElement('span');
+                            latencyInfo.classList.add('latency-info');
+                            
+                            // Color-coding based on latency rating
+                            const latencyRating = wordData.latency_info.rating;
+                            let latencyColor = '';
+                            
+                            if (latencyRating === 'Perfect') latencyColor = '#28a745'; // Green
+                            else if (latencyRating === 'Good') latencyColor = '#5cb85c'; // Light green
+                            else if (latencyRating === 'OK') latencyColor = '#ffc107'; // Yellow
+                            else if (latencyRating === 'Bad') latencyColor = '#f0ad4e'; // Orange
+                            else if (latencyRating === 'Poor') latencyColor = '#dc3545'; // Red
+                            
+                            latencyInfo.textContent = ` | Latency: ${wordData.latency_info.latency_seconds.toFixed(2)}s (${latencyRating})`;
+                            latencyInfo.style.marginLeft = '5px';
+                            latencyInfo.style.color = latencyColor;
+                            latencyInfo.style.fontWeight = 'bold';
+                            
+                            speakerLabel.appendChild(latencyInfo);
+                        }
                         
                         // Use a regular function instead of an arrow function to avoid closure issues
                         timeLink.onclick = function() {

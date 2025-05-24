@@ -226,12 +226,7 @@
                 <div class="tab" data-tab="transcript">Transcript</div>
             </div>
             
-            <div class="tab-content active" id="visualizations">
-                <div class="visualization-section">
-                    <h2>Conversation Timeline</h2>
-                    <p>This timeline shows when the user (left channel) and AI agent (right channel) were speaking during the call.</p>
-                    <img id="timelineImage" class="visualization-image" src="" alt="Timeline visualization">
-                </div>
+            <div class="tab-content active" id="visualizations">                <!-- Conversation Timeline section removed -->
                   <div class="visualization-section">
                     <h2>Turn-taking Latency Analysis</h2>
                     <p>This visualization shows the latency between user utterances and AI responses, with color-coded ratings.</p>
@@ -249,12 +244,7 @@
                     <p>This shows the audio waveforms for both channels with speaking intervals highlighted.</p>
                     <img id="waveformImage" class="visualization-image" src="" alt="Waveform visualization">
                 </div>
-                
-                <div class="visualization-section">
-                    <h2>Response Latency Distribution</h2>
-                    <p>This histogram shows the distribution of AI agent response latencies after user utterances.</p>
-                    <img id="latencyHistImage" class="visualization-image" src="" alt="Latency histogram">
-                </div>
+                  <!-- Response Latency Distribution section removed -->
                 
                 <div id="metricsTable">
                     <!-- Metrics table will be inserted here -->
@@ -308,10 +298,8 @@
                     // Update audio player
                     document.getElementById('audioElement').src = `/audio/${audioFile}`;
                     document.getElementById('audioPlayer').style.display = 'block';
-                    
-                    // Update images                    document.getElementById('timelineImage').src = `data:image/png;base64,${data.timeline_img}`;
+                      // Update images
                     document.getElementById('waveformImage').src = `data:image/png;base64,${data.waveform_img}`;
-                    document.getElementById('latencyHistImage').src = `data:image/png;base64,${data.latency_hist_img}`;
                     document.getElementById('speechOverlapImage').src = `data:image/png;base64,${data.speech_overlap_img}`;
                     document.getElementById('vadLatencyImage').src = `data:image/png;base64,${data.vad_latency_img}`;
                     

@@ -40,7 +40,7 @@ class AudioAnalysis(Base):
     p10_latency_ms = Column(Float)
     p50_latency_ms = Column(Float)
     p90_latency_ms = Column(Float)
-    
+
     # VAD-based latency metrics (using Silero VAD)
     vad_avg_latency = Column(Float)
     vad_min_latency = Column(Float)
@@ -91,7 +91,7 @@ def init_db():
     inspector = inspect(engine)
     if "audio_analyses" in inspector.get_table_names():
         columns = [col["name"] for col in inspector.get_columns("audio_analyses")]
-        
+
         # If the new column doesn't exist, recreate the tables
         if "vad_latency_details_json" not in columns:
             print("Recreating database with new schema...")
@@ -99,7 +99,7 @@ def init_db():
             Base.metadata.create_all(bind=engine)
             print("Database schema updated successfully.")
             return
-    
+
     # Otherwise, just create tables normally
     Base.metadata.create_all(bind=engine)
 
@@ -118,7 +118,7 @@ def add_analysis(db_session, metrics_data):
     agent_latencies_json = json.dumps(metrics_data.get("agent_answer_latencies", []))
     user_vad_segments_json = json.dumps(metrics_data.get("user_vad_segments", []))
     vad_latency_details_json = json.dumps(metrics_data.get("vad_latency_details", []))
-    
+
     latency_metrics = metrics_data.get("latency_metrics", {})
     vad_latency_metrics = metrics_data.get("vad_latency_metrics", {})
     transcript_data = metrics_data.get("transcript_data")
@@ -209,14 +209,13 @@ def recreate_metrics_from_db(db_record: AudioAnalysis):
             "p50_latency": db_record.vad_p50_latency,
             "p90_latency": db_record.vad_p90_latency,
         },
-        "vad_latency_details": json.loads(
-            db_record.vad_latency_details_json or "[]"
-        ),
+        "vad_latency_details": json.loads(db_record.vad_latency_details_json or "[]"),
         "agent_answer_latencies": json.loads(
             db_record.agent_answer_latencies_ms_json or "[]"
         ),
         "ai_interrupting_user": db_record.ai_interrupting_user,
-        "user_interrupting_ai": db_record.user_interrupting_ai,        "talk_ratio": db_record.talk_ratio,
+        "user_interrupting_ai": db_record.user_interrupting_ai,
+        "talk_ratio": db_record.talk_ratio,
         "average_pitch": db_record.average_pitch_hz,
         "words_per_minute": db_record.words_per_minute,
         "user_windows": json.loads(db_record.user_speech_segments_json or "[]"),

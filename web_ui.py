@@ -72,19 +72,21 @@ def analyze_audio():
 
     # Generate visualizations
     output_path = metrics["downsampled_path"]
-    vis_data = visualizer.generate_web_visualization(metrics, output_path)    # Add transcript words if available for chat bubble display
+    vis_data = visualizer.generate_web_visualization(
+        metrics, output_path
+    )  # Add transcript words if available for chat bubble display
     if metrics.get("transcript_data") and "words" in metrics["transcript_data"]:
         transcript_words = metrics["transcript_data"]["words"]
-        
+
         # Add latency information to AI agent messages
         if metrics.get("vad_latency_details"):
             latency_details = metrics["vad_latency_details"]
             ai_messages_start_times = {}
-            
+
             # First, create a dictionary mapping from agent start times to latency details
             for latency_info in latency_details:
                 ai_messages_start_times[latency_info["agent_start"]] = latency_info
-            
+
             # Then add latency info to each AI message's first word
             for word in transcript_words:
                 if word["speaker"] == "ai_agent":
@@ -92,16 +94,20 @@ def analyze_audio():
                     closest_start = min(
                         ai_messages_start_times.keys(),
                         key=lambda start: abs(start - word["start"]),
-                        default=None
+                        default=None,
                     )
-                    
+
                     if closest_start is not None:
                         # Only attach latency info if the start time is close enough to the word
-                        if abs(closest_start - word["start"]) < 0.5:  # Within 0.5 seconds
-                            word["latency_info"] = ai_messages_start_times[closest_start]
+                        if (
+                            abs(closest_start - word["start"]) < 0.5
+                        ):  # Within 0.5 seconds
+                            word["latency_info"] = ai_messages_start_times[
+                                closest_start
+                            ]
                             # Remove this start time so we don't use it again
                             del ai_messages_start_times[closest_start]
-        
+
         vis_data["transcript_words"] = transcript_words
     else:
         vis_data["transcript_words"] = []

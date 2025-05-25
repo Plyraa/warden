@@ -81,11 +81,9 @@ def analyze_audio():
         # Add latency information to AI agent messages
         if metrics.get("vad_latency_details"):
             latency_details = metrics["vad_latency_details"]
-            ai_messages_start_times = {}
-
-            # First, create a dictionary mapping from agent start times to latency details
+            ai_messages_start_times = {}  # First, create a dictionary mapping from agent start times to latency details
             for latency_info in latency_details:
-                ai_messages_start_times[latency_info["agent_start"]] = latency_info
+                ai_messages_start_times[latency_info["to_turn_start"]] = latency_info
 
             # Then add latency info to each AI message's first word
             for word in transcript_words:

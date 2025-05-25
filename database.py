@@ -59,7 +59,11 @@ class AudioAnalysis(Base):
     user_speech_segments_json = Column(String)  # JSON string
     user_vad_segments_json = Column(String)  # JSON string for VAD-detected segments
     agent_speech_segments_json = Column(String)  # JSON string
+    agent_vad_segments_json = Column(
+        String
+    )  # JSON string for agent VAD-detected segments
     agent_answer_latencies_ms_json = Column(String)  # JSON string
+    overlap_data_json = Column(String)  # JSON string for overlap detection data
 
     # Relationship to Transcript
     transcript_id = Column(Integer, ForeignKey("transcripts.id"))
@@ -87,13 +91,17 @@ class Transcript(Base):
 
 
 def init_db():
-    # Check if the database exists and if the vad_latency_details_json column is missing
+    # Check if the database exists and if the new columns are missing
     inspector = inspect(engine)
     if "audio_analyses" in inspector.get_table_names():
-        columns = [col["name"] for col in inspector.get_columns("audio_analyses")]
-
-        # If the new column doesn't exist, recreate the tables
-        if "vad_latency_details_json" not in columns:
+        columns = [
+            col["name"] for col in inspector.get_columns("audio_analyses")
+        ]  # If any of the new columns don't exist, recreate the tables
+        if (
+            "vad_latency_details_json" not in columns
+            or "overlap_data_json" not in columns
+            or "agent_vad_segments_json" not in columns
+        ):
             print("Recreating database with new schema...")
             Base.metadata.drop_all(bind=engine)
             Base.metadata.create_all(bind=engine)
@@ -117,7 +125,9 @@ def add_analysis(db_session, metrics_data):
     agent_windows_json = json.dumps(metrics_data.get("agent_windows", []))
     agent_latencies_json = json.dumps(metrics_data.get("agent_answer_latencies", []))
     user_vad_segments_json = json.dumps(metrics_data.get("user_vad_segments", []))
+    agent_vad_segments_json = json.dumps(metrics_data.get("agent_vad_segments", []))
     vad_latency_details_json = json.dumps(metrics_data.get("vad_latency_details", []))
+    overlap_data_json = json.dumps(metrics_data.get("overlap_data", {}))
 
     latency_metrics = metrics_data.get("latency_metrics", {})
     vad_latency_metrics = metrics_data.get("vad_latency_metrics", {})
@@ -150,7 +160,9 @@ def add_analysis(db_session, metrics_data):
         user_speech_segments_json=user_windows_json,
         user_vad_segments_json=user_vad_segments_json,
         agent_speech_segments_json=agent_windows_json,
+        agent_vad_segments_json=agent_vad_segments_json,
         agent_answer_latencies_ms_json=agent_latencies_json,
+        overlap_data_json=overlap_data_json,
     )
 
     if transcript_data:
@@ -221,6 +233,8 @@ def recreate_metrics_from_db(db_record: AudioAnalysis):
         "user_windows": json.loads(db_record.user_speech_segments_json or "[]"),
         "user_vad_segments": json.loads(db_record.user_vad_segments_json or "[]"),
         "agent_windows": json.loads(db_record.agent_speech_segments_json or "[]"),
+        "agent_vad_segments": json.loads(db_record.agent_vad_segments_json or "[]"),
+        "overlap_data": json.loads(db_record.overlap_data_json or "{}"),
         "analysis_timestamp": db_record.analysis_timestamp,
     }
 
@@ -257,25 +271,3 @@ if __name__ == "__main__":
     print("Initializing database...")
     init_db()
     print(f"Database initialized at {DATABASE_URL}")
-    # Example usage (optional, for testing)
-    # db = next(get_db())
-    # test_metrics = {
-    #     "filename": "test_file.mp3",
-    #     "downsampled_path": "sampled_test_calls/test_file_downsampled.mp3",
-    #     "latency_metrics": {"avg_latency": 100, "p10_latency": 50, "p50_latency": 100, "p90_latency": 150},
-    #     "agent_answer_latencies": [50,100,150],
-    #     "ai_interrupting_user": False,
-    #     "user_interrupting_ai": True,
-    #     "talk_ratio": 1.5,
-    #     "average_pitch": 220.0,
-    #     "words_per_minute": 150.0,
-    #     "user_windows": [[0.5, 2.0], [3.0, 4.5]],
-    #     "agent_windows": [[2.1, 2.9], [4.6, 5.5]],
-    # }
-    # add_analysis(db, test_metrics)
-    # print("Test analysis added.")
-    # retrieved = get_analysis_by_filename(db, "test_file.mp3")
-    # if retrieved:
-    #     print(f"Retrieved: {retrieved.original_filename}, Timestamp: {retrieved.analysis_timestamp}")
-    #     print(recreate_metrics_from_db(retrieved))
-    # db.close()

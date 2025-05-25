@@ -207,7 +207,7 @@ class AudioMetricsCalculator:
     def _merge_and_format_transcript(self, all_words_from_diarization):
         """Merges word lists (now receives a single list from diarization),
         sorts them, and formats into a dialog.
-        Note: Overlap detection is now handled separately by detect_overlaps_from_combined_turns."""
+        Note: Overlap detection is now handled separately by detect_overlaps_from_vad_segments."""
 
         # Input 'all_words_from_diarization' should have 'speaker' attributes
         # mapped to "customer", "ai_agent" (or "other_speaker_X") by _get_transcript_for_file.
@@ -369,7 +369,7 @@ class AudioMetricsCalculator:
             sr: Sample rate of the audio
 
         Returns:
-            List of (start_time, end_time) tuples for speech segments
+            List of dictionaries with 'start' and 'end' keys for speech segments
         """
         start_time = time.time()
         print("Starting Silero VAD speech detection...")
@@ -397,215 +397,322 @@ class AudioMetricsCalculator:
             min_silence_duration_ms=100,  # Minimum silence duration between speech chunks in ms
             min_speech_duration_ms=250,  # Minimum speech duration to be detected
             window_size_samples=512,  # Window size for processing
-            return_seconds=True,  # default it returns samples. but it doesn't match actual seconds. example below
+            return_seconds=True,  # Get timestamps directly in seconds
         )
         """
-        samples
-        [{'end': 33248, 'start': 32},
-        {'end': 77792, 'start': 42528},
-        {'end': 109536, 'start': 79392},
-        actual seconds
+        seconds format:
         [{'end': 2.1, 'start': 0.0},
         {'end': 4.9, 'start': 2.7},
-        {'end': 6.8, 'start': 5.0},
+        {'end': 6.8, 'start': 5.0}]
         """
         # Print raw Silero VAD timestamps for debugging
-        print(f"Raw Silero VAD timestamps: {speech_timestamps}")
-
-        # Convert timestamps to seconds
-        speech_segments = []
-        for segment in speech_timestamps:
-            start = segment["start"] / self.sampling_rate
-            end = segment["end"] / self.sampling_rate
-            speech_segments.append((start, end))
+        print(
+            f"Raw Silero VAD timestamps: {speech_timestamps}"
+        )  # Return dictionary format directly to avoid conversion issues
+        # No need for any conversions as return_seconds=True already gives us float values
 
         end_time = time.time()
         print(
-            f"Silero VAD detected {len(speech_segments)} speech segments in {end_time - start_time:.2f} seconds"
+            f"Silero VAD detected {len(speech_timestamps)} speech segments in {end_time - start_time:.2f} seconds"
         )
 
-        return speech_segments
+        return speech_timestamps
 
     def calculate_turn_taking_latency(self, user_vad_segments, agent_vad_segments):
         """
         Calculate turn-taking latency between user utterances and agent responses
-        using VAD for user speech and activity windows for agent.
-        Each user utterance is paired with the next available agent response.
-        Handles AI interruptions by skipping the interrupted user turn and the interrupting AI turn.
+        using VAD segments. Handles overlaps by splitting them into non-overlapping turns
+        and calculating latency based on actual conversation flow.
 
         Args:
-            user_vad_segments: List of {'start': float, 'end': float} for user speech from VAD
-            agent_vad_segments: List of {'start': float, 'end': float} for agent speech from VAD
+            user_vad_segments: List of (start, end) tuples for user speech from VAD
+            agent_vad_segments: List of (start, end) tuples for agent speech from VAD
 
         Returns:
             A tuple containing:
-            - metrics (dict): Dictionary with latency stats and ai_interruptions_handled_in_latency.
-            - latency_details (list): List of detailed latency data for non-interrupted turns.
+            - metrics (dict): Dictionary with latency stats and overlap information.
+            - latency_details (list): List of detailed latency data for turn transitions.
         """
-        latencies = []
-        latency_details = []
-        ai_interruptions_handled_in_latency = 0
+        # Convert inputs to dictionaries for consistent processing
+        user_segments = self._normalize_segments(user_vad_segments, "user")
+        agent_segments = self._normalize_segments(agent_vad_segments, "ai_agent")
 
-        if not user_vad_segments or not agent_vad_segments:
-            print("No user VAD segments or agent windows to calculate latency.")
-            return {
-                "avg_latency": 0,
-                "min_latency": 0,
-                "max_latency": 0,
-                "p10_latency": 0,
-                "p50_latency": 0,
-                "p90_latency": 0,
-                "ai_interruptions_handled_in_latency": 0,
-            }, []
+        if not user_segments or not agent_segments:
+            print("No user or agent segments to calculate latency.")
+            return self._create_empty_latency_stats(), []
 
-        # Ensure segments are sorted by start time
-        user_vad_segments = sorted(user_vad_segments, key=lambda x: float(x["start"]))
-
-        min_agent_speech_duration = 0  # VAD should handle meaningful duration
-        significant_agent_windows = sorted(
-            [
-                w
-                for w in agent_vad_segments
-                if (float(w["end"]) - float(w["start"])) >= min_agent_speech_duration
-            ],
-            key=lambda x: float(x["start"]),
+        # Create conversation timeline with overlap handling
+        conversation_turns = self._create_overlap_aware_timeline(
+            user_segments, agent_segments
         )
 
-        if not significant_agent_windows:
-            print("No significant agent windows to calculate latency against.")
-            return {
-                "avg_latency": 0,
-                "min_latency": 0,
-                "max_latency": 0,
-                "p10_latency": 0,
-                "p50_latency": 0,
-                "p90_latency": 0,
-                "ai_interruptions_handled_in_latency": 0,
-            }, []
-
-        print(
-            f"Initial counts - User VAD segments: {len(user_vad_segments)}, Significant Agent VAD segments: {len(significant_agent_windows)}"
+        # Calculate latencies between consecutive turns
+        latencies, latency_details, overlap_stats = self._calculate_turn_latencies(
+            conversation_turns
         )
 
-        current_agent_search_start_idx = 0
-
-        for user_segment in user_vad_segments:
-            user_start = float(user_segment["start"])
-            user_end = float(user_segment["end"])
-
-            processed_this_user_segment = False
-
-            for agent_search_idx in range(
-                current_agent_search_start_idx, len(significant_agent_windows)
-            ):
-                agent_window = significant_agent_windows[agent_search_idx]
-                agent_start = float(agent_window["start"])
-                # agent_end = float(agent_window['end']) # Not needed for this logic step
-
-                # Check for AI interruption: AI starts speaking during the user's current speech segment.
-                if user_start < agent_start < user_end:
-                    ai_interruptions_handled_in_latency += 1
-                    print(
-                        f"AI interruption detected and handled for latency: User {user_segment} interrupted by Agent {agent_window}"
-                    )
-                    # This user segment and this agent window are skipped for latency.
-                    # Advance the agent search index past the interrupting agent window for the next user segment.
-                    current_agent_search_start_idx = agent_search_idx + 1
-                    processed_this_user_segment = True
-                    break  # Move to the next user_segment
-
-                # Check for standard latency: AI starts after the user has finished.
-                elif agent_start > user_end:
-                    latency_seconds = agent_start - user_end
-                    # Latency must be positive.
-                    if (
-                        latency_seconds > 0.001
-                    ):  # Adding a small threshold to avoid zero/negative due to float precision
-                        latencies.append(latency_seconds)
-                        latency_details.append(
-                            {
-                                "latency_seconds": latency_seconds,
-                                "latency_ms": latency_seconds * 1000,
-                                "start_time": agent_start,
-                                "user_end": user_end,
-                                "agent_start": agent_start,
-                                "user_turn_details": user_segment,
-                                "agent_turn_details": agent_window,
-                                "rating": self.rate_latency(latency_seconds),
-                            }
-                        )
-                    # This agent window is now "consumed" as a response.
-                    current_agent_search_start_idx = agent_search_idx + 1
-                    processed_this_user_segment = True
-                    break  # Move to the next user_segment
-
-                # Else (agent_start <= user_start or agent_start == user_end):
-                # This agent window is too early for the current user segment (e.g., started before user)
-                # or started exactly when user ended (zero latency, typically handled by VAD merging or min_latency threshold).
-                # Continue searching for a suitable agent window for the *current* user_segment.
-                # current_agent_search_start_idx is NOT advanced here, as this agent window was not "used".
-                # However, if all subsequent agent windows are also "too early" for this user segment,
-                # this user segment won't get a latency pair.
-                # The crucial part is that current_agent_search_start_idx only advances when an agent window is consumed.
-
-            if not processed_this_user_segment and current_agent_search_start_idx < len(
-                significant_agent_windows
-            ):
-                # If the user segment was not processed (no interruption, no response found starting AFTER it),
-                # and there are still agent windows that were earlier than this user segment or started concurrently,
-                # we need to ensure current_agent_search_start_idx is at least at the first agent window
-                # that could potentially respond to the *next* user segment.
-                # This situation arises if all remaining agent windows start before or during the current user segment ends,
-                # but none qualify as an interruption as defined (user_start < agent_start < user_end).
-                # We need to advance current_agent_search_start_idx past those agent windows that definitely won't apply to future user turns
-                # if they occurred before the current user turn ended.
-                temp_advance_idx = current_agent_search_start_idx
-                while (
-                    temp_advance_idx < len(significant_agent_windows)
-                    and float(significant_agent_windows[temp_advance_idx]["start"])
-                    <= user_end
-                ):
-                    temp_advance_idx += 1
-                current_agent_search_start_idx = temp_advance_idx
-
-        print(
-            f"Calculated {len(latencies)} turn-taking latencies. Detected and handled {ai_interruptions_handled_in_latency} AI interruptions in latency context."
-        )
-
-        if not latencies:
-            latency_stats = {
-                "avg_latency": 0,
-                "min_latency": 0,
-                "max_latency": 0,
-                "p10_latency": 0,
-                "p50_latency": 0,
-                "p90_latency": 0,
-            }
-        else:
-            avg_latency = sum(latencies) / len(latencies)
-            min_latency = min(latencies)
-            max_latency = max(latencies)
-            p10_latency = (
-                np.percentile(latencies, 10) if len(latencies) >= 10 else min_latency
-            )
-            p50_latency = np.percentile(latencies, 50)
-            p90_latency = (
-                np.percentile(latencies, 90) if len(latencies) >= 10 else max_latency
-            )
-            latency_stats = {
-                "avg_latency": avg_latency,
-                "min_latency": min_latency,
-                "max_latency": max_latency,
-                "p10_latency": p10_latency,
-                "p50_latency": p50_latency,
-                "p90_latency": p90_latency,
-            }
-
-        latency_stats["ai_interruptions_handled_in_latency"] = (
-            ai_interruptions_handled_in_latency
-        )
+        # Generate statistics
+        latency_stats = self._generate_latency_stats(latencies)
+        latency_stats.update(overlap_stats)
 
         return latency_stats, latency_details
+
+    def _normalize_segments(self, segments, speaker_type):
+        """Convert segments to normalized dictionary format."""
+        normalized = []
+        for seg in segments:
+            if isinstance(seg, (list, tuple)) and len(seg) == 2:
+                normalized.append(
+                    {"start": seg[0], "end": seg[1], "speaker": speaker_type}
+                )
+            elif isinstance(seg, dict) and "start" in seg and "end" in seg:
+                seg_copy = seg.copy()
+                seg_copy["speaker"] = speaker_type
+                normalized.append(seg_copy)
+            else:
+                print(f"Warning: Skipping invalid {speaker_type} segment: {seg}")
+        return sorted(normalized, key=lambda x: x["start"])
+
+    def _create_overlap_aware_timeline(
+        self, user_segments, agent_segments, max_gap=2.0
+    ):
+        """
+        Create a timeline of conversation turns that properly handles overlaps.
+        Splits overlapping segments and merges nearby segments from the same speaker.
+
+        Args:
+            user_segments: Normalized user segments
+            agent_segments: Normalized agent segments
+            max_gap: Maximum gap in seconds to merge consecutive segments from same speaker
+        """
+        all_segments = user_segments + agent_segments
+        all_segments.sort(key=lambda x: x["start"])
+
+        print(f"DEBUG: Processing {len(all_segments)} total segments")
+
+        # Step 1: Split overlapping segments to create non-overlapping intervals
+        timeline_events = []
+        for seg in all_segments:
+            timeline_events.append(
+                {
+                    "time": seg["start"],
+                    "type": "start",
+                    "speaker": seg["speaker"],
+                    "segment": seg,
+                }
+            )
+            timeline_events.append(
+                {
+                    "time": seg["end"],
+                    "type": "end",
+                    "speaker": seg["speaker"],
+                    "segment": seg,
+                }
+            )
+
+        timeline_events.sort(key=lambda x: (x["time"], x["type"] == "start"))
+
+        # Process timeline to create non-overlapping segments
+        active_speakers = set()
+        current_time = 0
+        segments_with_overlaps = []
+
+        for event in timeline_events:
+            if event["time"] > current_time and active_speakers:
+                # Create segment for active speakers
+                speakers_list = list(active_speakers)
+                primary_speaker = (
+                    speakers_list[0] if len(speakers_list) == 1 else "overlap"
+                )
+
+                segments_with_overlaps.append(
+                    {
+                        "start": current_time,
+                        "end": event["time"],
+                        "speaker": primary_speaker,
+                        "speakers": speakers_list,
+                        "is_overlap": len(speakers_list) > 1,
+                    }
+                )
+
+            current_time = event["time"]
+
+            if event["type"] == "start":
+                active_speakers.add(event["speaker"])
+            else:
+                active_speakers.discard(event["speaker"])
+
+        # Step 2: Merge nearby segments from the same speaker
+        conversation_turns = self._merge_nearby_segments(
+            segments_with_overlaps, max_gap
+        )
+
+        # Debug output
+        print(f"DEBUG: Created {len(conversation_turns)} conversation turns:")
+        for i, turn in enumerate(conversation_turns):
+            overlap_info = (
+                f" (OVERLAP: {turn.get('speakers', [])})"
+                if turn.get("is_overlap")
+                else ""
+            )
+            print(
+                f"DEBUG: Turn {i + 1}: {turn['speaker']} {turn['start']:.1f}-{turn['end']:.1f}{overlap_info}"
+            )
+
+        return conversation_turns
+
+    def _merge_nearby_segments(self, segments, max_gap=5.0):
+        """
+        Merge segments from the same speaker that are close in time.
+        This is more aggressive about merging to create cleaner conversation turns.
+        """
+        if not segments:
+            return []
+
+        merged = []
+        current_turn = segments[0].copy()
+
+        for next_seg in segments[1:]:
+            # Check if we should merge with current turn
+            # Merge if same speaker and not too far apart, even if there are overlaps
+            can_merge = (
+                next_seg["speaker"] == current_turn["speaker"]
+                and (next_seg["start"] - current_turn["end"]) <= max_gap
+            )
+
+            if can_merge:
+                # Extend current turn to include the new segment
+                current_turn["end"] = max(current_turn["end"], next_seg["end"])
+                # Update overlap status if either segment was an overlap
+                if next_seg.get("is_overlap", False) or current_turn.get(
+                    "is_overlap", False
+                ):
+                    current_turn["is_overlap"] = True
+            else:
+                # Finalize current turn and start new one
+                merged.append(current_turn)
+                current_turn = next_seg.copy()
+
+        # Don't forget the last turn
+        merged.append(current_turn)
+
+        return merged
+
+    def _calculate_turn_latencies(self, conversation_turns):
+        """Calculate latencies between consecutive turns, handling overlaps appropriately."""
+        latencies = []
+        latency_details = []
+
+        # Statistics tracking
+        total_overlaps = sum(
+            1 for turn in conversation_turns if turn.get("is_overlap", False)
+        )
+        ai_interruptions = 0
+        user_interruptions = 0
+        successful_handoffs = 0
+
+        for i in range(len(conversation_turns) - 1):
+            current_turn = conversation_turns[i]
+            next_turn = conversation_turns[i + 1]
+
+            # Skip overlapping segments for latency calculation
+            if current_turn.get("is_overlap") or next_turn.get("is_overlap"):
+                continue
+
+            # Only calculate latency for speaker changes
+            if current_turn["speaker"] == next_turn["speaker"]:
+                continue
+
+            # Calculate latency
+            latency_seconds = next_turn["start"] - current_turn["end"]
+
+            # Categorize the interaction type
+            interaction_type = "unknown"
+            if current_turn["speaker"] == "user" and next_turn["speaker"] == "ai_agent":
+                interaction_type = "user_to_agent"
+                successful_handoffs += 1
+            elif (
+                current_turn["speaker"] == "ai_agent" and next_turn["speaker"] == "user"
+            ):
+                interaction_type = "agent_to_user"
+
+                # Check if this might be an interruption (negative or very small latency)
+                if latency_seconds < 0.5:
+                    user_interruptions += 1
+                    interaction_type += "_interruption"
+
+            # Only include positive latencies (actual response delays)
+            if latency_seconds > 0.001:  # Small threshold for floating point precision
+                latencies.append(latency_seconds)
+                latency_details.append(
+                    {
+                        "latency_seconds": latency_seconds,
+                        "latency_ms": latency_seconds * 1000,
+                        "interaction_type": interaction_type,
+                        "from_speaker": current_turn["speaker"],
+                        "to_speaker": next_turn["speaker"],
+                        "from_turn_end": current_turn["end"],
+                        "to_turn_start": next_turn["start"],
+                        "from_turn_details": current_turn,
+                        "to_turn_details": next_turn,
+                        "rating": self.rate_latency(latency_seconds),
+                    }
+                )
+            elif latency_seconds < -0.1:  # Significant overlap/interruption
+                if current_turn["speaker"] == "user":
+                    ai_interruptions += 1
+
+        overlap_stats = {
+            "total_overlaps": total_overlaps,
+            "ai_interruptions": ai_interruptions,
+            "user_interruptions": user_interruptions,
+            "successful_handoffs": successful_handoffs,
+        }
+
+        print(f"Calculated {len(latencies)} turn-taking latencies.")
+        print(f"Overlap statistics: {overlap_stats}")
+
+        return latencies, latency_details, overlap_stats
+
+    def _generate_latency_stats(self, latencies):
+        """Generate statistical summary of latencies."""
+        if not latencies:
+            return {
+                "avg_latency": 0,
+                "min_latency": 0,
+                "max_latency": 0,
+                "p10_latency": 0,
+                "p50_latency": 0,
+                "p90_latency": 0,
+            }
+
+        return {
+            "avg_latency": sum(latencies) / len(latencies),
+            "min_latency": min(latencies),
+            "max_latency": max(latencies),
+            "p10_latency": np.percentile(latencies, 10)
+            if len(latencies) >= 10
+            else min(latencies),
+            "p50_latency": np.percentile(latencies, 50),
+            "p90_latency": np.percentile(latencies, 90)
+            if len(latencies) >= 10
+            else max(latencies),
+        }
+
+    def _create_empty_latency_stats(self):
+        """Create empty latency statistics."""
+        return {
+            "avg_latency": 0,
+            "min_latency": 0,
+            "max_latency": 0,
+            "p10_latency": 0,
+            "p50_latency": 0,
+            "p90_latency": 0,
+            "total_overlaps": 0,
+            "ai_interruptions": 0,
+            "user_interruptions": 0,
+            "successful_handoffs": 0,
+        }
 
     def rate_latency(self, latency_seconds):
         """
@@ -631,12 +738,8 @@ class AudioMetricsCalculator:
     def calculate_talk_ratio(self, user_windows, agent_windows):
         """Calculate ratio of agent speaking time to user speaking time"""
         try:
-            user_duration = sum(
-                float(turn["end"]) - float(turn["start"]) for turn in user_windows
-            )
-            agent_duration = sum(
-                float(turn["end"]) - float(turn["start"]) for turn in agent_windows
-            )
+            user_duration = sum(turn["end"] - turn["start"] for turn in user_windows)
+            agent_duration = sum(turn["end"] - turn["start"] for turn in agent_windows)
         except (KeyError, TypeError, ValueError) as e:
             print(
                 f"ERROR: Could not calculate durations in calculate_talk_ratio. User: {user_windows}, Agent: {agent_windows}. Error: {e}"
@@ -679,8 +782,8 @@ class AudioMetricsCalculator:
         total_speaking_time_seconds = 0
         for turn in agent_windows:
             try:
-                start = float(turn["start"])
-                end = float(turn["end"])
+                start = turn["start"]
+                end = turn["end"]
                 total_speaking_time_seconds += end - start
                 start_idx = int(start * sr)
                 end_idx = int(end * sr)
@@ -714,9 +817,9 @@ class AudioMetricsCalculator:
         syllable_count = len(peaks)
 
         # Estimate words (roughly 1.5 syllables per word in English)
-        word_count = syllable_count / 1.5
-
-        # Calculate total agent speaking time in minutes
+        word_count = (
+            syllable_count / 1.5
+        )  # Calculate total agent speaking time in minutes
         total_speaking_time_minutes = total_speaking_time_seconds / 60
 
         if total_speaking_time_minutes > 0:
@@ -727,123 +830,38 @@ class AudioMetricsCalculator:
     def _create_combined_speaker_turns(self, raw_user_segments, raw_agent_segments):
         """
         Combines and merges VAD segments for user and agent into a single timeline of speaker turns.
-        All consecutive segments from the same speaker are merged into a single turn, regardless
-        of the time gap between them. A new turn is only created when the speaker changes.
+        Uses the improved overlap-aware algorithm to handle overlapping speech properly.
 
         Args:
-            raw_user_segments: List of (start, end) tuples for user VAD.
-            raw_agent_segments: List of (start, end) tuples for agent VAD.
+            raw_user_segments: List of dictionaries with 'start' and 'end' keys for user VAD.
+            raw_agent_segments: List of dictionaries with 'start' and 'end' keys for agent VAD.
 
         Returns:
             A list of dictionaries, where each dictionary is a turn with
             {'speaker': 'user'/'ai_agent', 'start': float, 'end': float}, sorted by start time.
         """
-        tagged_segments = []
-        # Ensure segments are actual tuples/lists of two numbers before processing
-        for seg in raw_user_segments:
-            if isinstance(seg, (list, tuple)) and len(seg) == 2:
-                tagged_segments.append(
-                    {"speaker": "user", "start": float(seg[0]), "end": float(seg[1])}
-                )
-            else:
-                print(f"Warning: Skipping invalid user segment: {seg}")
-        for seg in raw_agent_segments:
-            if isinstance(seg, (list, tuple)) and len(seg) == 2:
-                tagged_segments.append(
-                    {
-                        "speaker": "ai_agent",
-                        "start": float(seg[0]),
-                        "end": float(seg[1]),
-                    }
-                )
-            else:
-                print(f"Warning: Skipping invalid agent segment: {seg}")
+        # Normalize segments
+        user_segments = self._normalize_segments(raw_user_segments, "user")
+        agent_segments = self._normalize_segments(raw_agent_segments, "ai_agent")
 
-        if not tagged_segments:
+        if not user_segments and not agent_segments:
             return []
 
-        # First sort by start time to process segments chronologically
-        tagged_segments.sort(key=lambda x: x["start"])
-        print(f"DEBUG: Initial segments sorted by start time: {tagged_segments}")
-
-        # Separate segments by speaker
-        user_segments = [seg for seg in tagged_segments if seg["speaker"] == "user"]  # noqa: F841
-        agent_segments = [  # noqa: F841
-            seg for seg in tagged_segments if seg["speaker"] == "ai_agent"
-        ]  # Simple approach: Group all segments by speaker, creating a new turn only when speaker changes
-
-        def create_speaker_turns(segments):
-            """
-            Create a single turn for each consecutive group of segments from the same speaker.
-            No time threshold is applied - a new turn is created only when the speaker changes.
-
-            Args:
-                segments: List of segment dictionaries with speaker, start, and end times
-            """
-            if not segments:
-                return []
-
-            # Group segments by speaker
-            turns = []
-            current_speaker = None
-            current_segments = []
-
-            for segment in segments:
-                speaker = segment["speaker"]
-
-                # If speaker changes or this is the first segment
-                if current_speaker is None or speaker != current_speaker:
-                    # Create a turn for the previous speaker's segments if we have any
-                    if current_segments:
-                        seg_start_time = min(seg["start"] for seg in current_segments)
-                        seg_end_time = max(seg["end"] for seg in current_segments)
-
-                        turns.append(
-                            {
-                                "speaker": current_speaker,
-                                "start": seg_start_time,
-                                "end": seg_end_time,
-                            }
-                        )
-                    # Start new group with current segment
-                    current_speaker = speaker
-                    current_segments = [segment]
-                else:
-                    # Same speaker, add to current group regardless of time gap
-                    current_segments.append(segment)
-
-            # Don't forget to add the last group
-            if current_segments:
-                start_time = min(seg["start"] for seg in current_segments)
-                end_time = max(seg["end"] for seg in current_segments)
-                turns.append(
-                    {"speaker": current_speaker, "start": start_time, "end": end_time}
-                )
-
-            return turns
-
-        # Create speaker turns using the simplified approach
-        merged_turns = create_speaker_turns(tagged_segments)
-
-        # Sort all turns by start time (should already be in order)
-        merged_turns.sort(key=lambda x: x["start"])
-
-        # Pretty print the merged turns for debugging
-        for turn in merged_turns:
-            print(f"DEBUG: Final merged turn: {turn}")
-
-        print(
-            f"Combined {len(raw_user_segments) + len(raw_agent_segments)} raw segments into {len(merged_turns)} merged speaker turns."
+        # Create overlap-aware timeline
+        conversation_turns = self._create_overlap_aware_timeline(
+            user_segments, agent_segments
         )
-        return merged_turns
 
-    def detect_overlaps_from_combined_turns(self, combined_speaker_turns):
+        return conversation_turns
+
+    def detect_overlaps_from_vad_segments(self, user_vad_segments, agent_vad_segments):
         """
-        Detect overlapping speech segments directly from combined speaker turns.
-        This is more accurate than using ElevenLabs diarization for overlap detection.
+        Detect overlapping speech segments directly from raw Silero VAD output.
+        This provides higher granularity than using processed combined speaker turns.
 
         Args:
-            combined_speaker_turns: List of dicts with {'speaker', 'start', 'end'} from _create_combined_speaker_turns
+            user_vad_segments: List of dicts with {'start', 'end'} from detect_speech_silero_vad for user channel
+            agent_vad_segments: List of dicts with {'start', 'end'} from detect_speech_silero_vad for agent channel
 
         Returns:
             Dictionary with overlap information:
@@ -852,67 +870,55 @@ class AudioMetricsCalculator:
             - total_overlap_count: Integer, total number of overlaps detected
             - overlaps: List of dicts with {'start', 'end', 'duration', 'interrupter', 'interrupted'}
         """
-        # Parameters - same as used in previous detection methods for consistency
-        transition_buffer = 0.2  # 200ms buffer to allow for natural transitions
-        min_overlap_duration = 0.05  # Minimum duration of overlap to count
-        min_intrusion_ratio = 0.10  # At least 20% overlap to count as significant
+        print("DEBUG: Using raw VAD segments for overlap detection")
+        print(f"DEBUG: User VAD segments: {len(user_vad_segments)}")
+        print(f"DEBUG: Agent VAD segments: {len(agent_vad_segments)}")
 
-        # Sort turns by start time (should already be sorted, but to be sure)
-        sorted_turns = sorted(combined_speaker_turns, key=lambda x: float(x["start"]))
+        # Parameters for overlap detection
+        transition_buffer = 0.2  # Reduced buffer for more sensitive detection with VAD
+        min_overlap_duration = 0.05  # Minimum duration of overlap to count
+        min_intrusion_ratio = 0.02  # At least 10% overlap to count as significant
 
         overlaps = []
         has_user_interrupting_ai = False
         has_ai_interrupting_user = False
 
-        # We need to check each pair of turns for potential overlaps
-        for i in range(len(sorted_turns) - 1):
-            for j in range(i + 1, len(sorted_turns)):
-                turn_i = sorted_turns[i]
-                turn_j = sorted_turns[j]
+        # Check every user segment against every agent segment for overlaps
+        for user_segment in user_vad_segments:
+            user_start = user_segment["start"]
+            user_end = user_segment["end"]
 
-                # Get start/end times as floats
-                start_i = float(turn_i["start"])
-                end_i = float(turn_i["end"])
-                start_j = float(turn_j["start"])
-                end_j = float(turn_j["end"])
+            for agent_segment in agent_vad_segments:
+                agent_start = agent_segment["start"]
+                agent_end = agent_segment["end"]
 
-                # Skip if there's no overlap
-                if start_j >= end_i or start_i >= end_j:
+                # Check if there's any overlap between these segments
+                overlap_start = max(user_start, agent_start)
+                overlap_end = min(user_end, agent_end)
+
+                # Skip if no overlap
+                if overlap_start >= overlap_end:
                     continue
 
-                # Calculate overlap
-                overlap_start = max(start_i, start_j)
-                overlap_end = min(end_i, end_j)
                 overlap_duration = overlap_end - overlap_start
 
-                # We've found an overlap - now determine if it counts as an interruption
-                # For it to count:
-                # 1. Overlap must exceed minimum duration
-                # 2. The ratio of overlap to the interrupted turn must exceed minimum ratio
-                # 3. Must account for transition buffer (natural handoff)
+                # Skip very short overlaps
+                if overlap_duration < min_overlap_duration:
+                    continue
 
-                # Who started first? The second speaker is the interrupter
-                if start_j > start_i:
-                    # turn_j started after turn_i, so turn_j's speaker is the interrupter
-                    interrupter = turn_j["speaker"]
-                    interrupted = turn_i["speaker"]
+                # Determine who started first to identify the interrupter
+                if user_start < agent_start:
+                    # User started first, agent is interrupting
+                    interrupter = "ai_agent"
+                    interrupted = "user"
 
-                    # Check if start_j is before end_i minus transition buffer
-                    # This means turn_j started speaking while turn_i was still meaningfully speaking
-                    if start_j < end_i - transition_buffer:
-                        duration_i = end_i - start_i
-                        intrusion_ratio = overlap_duration / duration_i
+                    # Check if agent started before user finished (minus buffer)
+                    if agent_start < user_end - transition_buffer:
+                        user_duration = user_end - user_start
+                        intrusion_ratio = overlap_duration / user_duration
 
-                        if (
-                            overlap_duration > min_overlap_duration
-                            and intrusion_ratio > min_intrusion_ratio
-                        ):
-                            # This is a significant interruption
-                            if interrupter == "user" and interrupted == "ai_agent":
-                                has_user_interrupting_ai = True
-                            elif interrupter == "ai_agent" and interrupted == "user":
-                                has_ai_interrupting_user = True
-
+                        if intrusion_ratio >= min_intrusion_ratio:
+                            has_ai_interrupting_user = True
                             overlaps.append(
                                 {
                                     "start": overlap_start,
@@ -922,26 +928,19 @@ class AudioMetricsCalculator:
                                     "interrupted": interrupted,
                                 }
                             )
-                else:
-                    # turn_i started after turn_j, so turn_i's speaker is the interrupter
-                    interrupter = turn_i["speaker"]
-                    interrupted = turn_j["speaker"]
 
-                    # Check if start_i is before end_j minus transition buffer
-                    if start_i < end_j - transition_buffer:
-                        duration_j = end_j - start_j
-                        intrusion_ratio = overlap_duration / duration_j
+                elif agent_start < user_start:
+                    # Agent started first, user is interrupting
+                    interrupter = "user"
+                    interrupted = "ai_agent"
 
-                        if (
-                            overlap_duration > min_overlap_duration
-                            and intrusion_ratio > min_intrusion_ratio
-                        ):
-                            # This is a significant interruption
-                            if interrupter == "user" and interrupted == "ai_agent":
-                                has_user_interrupting_ai = True
-                            elif interrupter == "ai_agent" and interrupted == "user":
-                                has_ai_interrupting_user = True
+                    # Check if user started before agent finished (minus buffer)
+                    if user_start < agent_end - transition_buffer:
+                        agent_duration = agent_end - agent_start
+                        intrusion_ratio = overlap_duration / agent_duration
 
+                        if intrusion_ratio >= min_intrusion_ratio:
+                            has_user_interrupting_ai = True
                             overlaps.append(
                                 {
                                     "start": overlap_start,
@@ -951,15 +950,30 @@ class AudioMetricsCalculator:
                                     "interrupted": interrupted,
                                 }
                             )
-        # debug the overlaps
-        print(f"DEBUG: Found {len(overlaps)} overlaps.")
-        print(f"DEBUG: Overlaps: {overlaps}")
+
+        # Remove duplicate overlaps (can happen if segments partially overlap)
+        unique_overlaps = []
+        for overlap in overlaps:
+            is_duplicate = False
+            for existing in unique_overlaps:
+                # Check if this overlap is very similar to an existing one
+                if (
+                    abs(overlap["start"] - existing["start"]) < 0.05
+                    and abs(overlap["end"] - existing["end"]) < 0.05
+                ):
+                    is_duplicate = True
+                    break
+            if not is_duplicate:
+                unique_overlaps.append(overlap)
+
+        print(f"DEBUG: Found {len(unique_overlaps)} unique overlaps from raw VAD")
+        print(f"DEBUG: VAD-based overlaps: {unique_overlaps}")
 
         return {
             "has_user_interrupting_ai": has_user_interrupting_ai,
             "has_ai_interrupting_user": has_ai_interrupting_user,
-            "total_overlap_count": len(overlaps),
-            "overlaps": overlaps,
+            "total_overlap_count": len(unique_overlaps),
+            "overlaps": unique_overlaps,
         }
 
     def _correlate_speakers_with_channels(
@@ -971,8 +985,8 @@ class AudioMetricsCalculator:
 
         Args:
             transcription_words: List of word objects from ElevenLabs with speaker_id, start, end
-            user_vad_segments: VAD segments from left channel (user) as list of (start, end) tuples
-            agent_vad_segments: VAD segments from right channel (agent) as list of (start, end) tuples
+            user_vad_segments: VAD segments from left channel (user) as list of dicts with start/end keys
+            agent_vad_segments: VAD segments from right channel (agent) as list of dicts with start/end keys
 
         Returns:
             Dictionary mapping ElevenLabs speaker IDs to actual speaker labels
@@ -1020,37 +1034,59 @@ class AudioMetricsCalculator:
             print(
                 f"Speaker {elevenlabs_speaker_id}: User overlap={user_overlap:.3f}, Agent overlap={agent_overlap:.3f}"
             )
-
         # Create speaker mapping based on highest overlaps
         speaker_map = {}
-        assigned_speakers = set()
 
-        # Sort speakers by their best correlation score to ensure consistent assignment
-        for elevenlabs_speaker_id in sorted(speaker_correlations.keys()):
-            correlations = speaker_correlations[elevenlabs_speaker_id]
+        # First pass: identify the two strongest correlations for customer and agent
+        best_customer_speaker = None
+        best_customer_score = 0.0
+        best_agent_speaker = None
+        best_agent_score = 0.0
 
-            if correlations["user_overlap"] > correlations["agent_overlap"]:
-                if "customer" not in assigned_speakers:
+        for elevenlabs_speaker_id, correlations in speaker_correlations.items():
+            if correlations["user_overlap"] > best_customer_score:
+                best_customer_score = correlations["user_overlap"]
+                best_customer_speaker = elevenlabs_speaker_id
+
+            if correlations["agent_overlap"] > best_agent_score:
+                best_agent_score = correlations["agent_overlap"]
+                best_agent_speaker = elevenlabs_speaker_id
+
+        # Assign the strongest correlations
+        if best_customer_speaker:
+            speaker_map[best_customer_speaker] = "customer"
+        if best_agent_speaker and best_agent_speaker != best_customer_speaker:
+            speaker_map[best_agent_speaker] = "ai_agent"
+
+        # Second pass: assign any remaining speakers to the role they overlap with most
+        for elevenlabs_speaker_id in speaker_correlations.keys():
+            if elevenlabs_speaker_id not in speaker_map:
+                correlations = speaker_correlations[elevenlabs_speaker_id]
+                if correlations["user_overlap"] > correlations["agent_overlap"]:
                     speaker_map[elevenlabs_speaker_id] = "customer"
-                    assigned_speakers.add("customer")
-                elif "ai_agent" not in assigned_speakers:
-                    speaker_map[elevenlabs_speaker_id] = "ai_agent"
-                    assigned_speakers.add("ai_agent")
-                else:
-                    speaker_map[elevenlabs_speaker_id] = (
-                        f"unknown_user_{elevenlabs_speaker_id}"
+                    print(
+                        f"Assigning additional speaker {elevenlabs_speaker_id} to customer (overlap: {correlations['user_overlap']:.3f})"
                     )
-            else:
-                if "ai_agent" not in assigned_speakers:
-                    speaker_map[elevenlabs_speaker_id] = "ai_agent"
-                    assigned_speakers.add("ai_agent")
-                elif "customer" not in assigned_speakers:
-                    speaker_map[elevenlabs_speaker_id] = "customer"
-                    assigned_speakers.add("customer")
                 else:
-                    speaker_map[elevenlabs_speaker_id] = (
-                        f"unknown_agent_{elevenlabs_speaker_id}"
+                    speaker_map[elevenlabs_speaker_id] = "ai_agent"
+                    print(
+                        f"Assigning additional speaker {elevenlabs_speaker_id} to ai_agent (overlap: {correlations['agent_overlap']:.3f})"
                     )
+
+        print(f"Final speaker mapping: {speaker_map}")
+
+        # Fallback: ensure we have at least some mapping if correlation fails
+        if not speaker_map:
+            print("Warning: No speaker correlations found. Using fallback mapping.")
+            # Get the first two speakers if available
+            speaker_ids = list(speaker_segments.keys())
+            if len(speaker_ids) >= 2:
+                speaker_map[speaker_ids[0]] = "ai_agent"
+                speaker_map[speaker_ids[1]] = "customer"
+            elif len(speaker_ids) == 1:
+                speaker_map[speaker_ids[0]] = (
+                    "ai_agent"  # Assume single speaker is agent
+                )
 
         return speaker_map
 
@@ -1059,8 +1095,8 @@ class AudioMetricsCalculator:
         Calculate overlap score between two sets of time segments.
 
         Args:
-            segments_a: List of (start, end) tuples for first set
-            segments_b: List of (start, end) tuples for second set
+            segments_a: List of dictionaries with 'start' and 'end' keys or (start, end) tuples
+            segments_b: List of dictionaries with 'start' and 'end' keys or (start, end) tuples
 
         Returns:
             Float overlap score (0-1, where 1 is perfect overlap)
@@ -1068,11 +1104,24 @@ class AudioMetricsCalculator:
         if not segments_a or not segments_b:
             return 0.0
 
-        # Convert segments_b to the same format if it's from VAD (might be tuples)
+        # Normalize segments_a to a list of tuples
+        segments_a_normalized = []
+        for seg in segments_a:
+            if isinstance(seg, dict) and "start" in seg and "end" in seg:
+                segments_a_normalized.append((seg["start"], seg["end"]))
+            elif isinstance(seg, (list, tuple)) and len(seg) == 2:
+                segments_a_normalized.append((seg[0], seg[1]))
+            else:
+                print(f"Warning: Unexpected segment format in segments_a: {seg}")
+                continue
+
+        # Normalize segments_b to a list of tuples
         segments_b_normalized = []
         for seg in segments_b:
-            if isinstance(seg, (list, tuple)) and len(seg) == 2:
-                segments_b_normalized.append((float(seg[0]), float(seg[1])))
+            if isinstance(seg, dict) and "start" in seg and "end" in seg:
+                segments_b_normalized.append((seg["start"], seg["end"]))
+            elif isinstance(seg, (list, tuple)) and len(seg) == 2:
+                segments_b_normalized.append((seg[0], seg[1]))
             else:
                 print(f"Warning: Unexpected segment format in segments_b: {seg}")
                 continue
@@ -1080,7 +1129,7 @@ class AudioMetricsCalculator:
         total_overlap = 0.0
         total_duration_a = 0.0
 
-        for start_a, end_a in segments_a:
+        for start_a, end_a in segments_a_normalized:
             duration_a = end_a - start_a
             total_duration_a += duration_a
 
@@ -1187,16 +1236,14 @@ class AudioMetricsCalculator:
             print("Creating combined speaker turns...")
             combined_speaker_turns = self._create_combined_speaker_turns(
                 raw_user_vad_segments, raw_agent_vad_segments
-            )
-
-            # Extract merged turns for each speaker for subsequent calculations
+            )  # Extract merged turns for each speaker for subsequent calculations
             user_speech_turns = [
-                {"start": float(turn["start"]), "end": float(turn["end"])}
+                {"start": turn["start"], "end": turn["end"]}
                 for turn in combined_speaker_turns
                 if turn["speaker"] == "user"
             ]
             agent_speech_turns = [
-                {"start": float(turn["start"]), "end": float(turn["end"])}
+                {"start": turn["start"], "end": turn["end"]}
                 for turn in combined_speaker_turns
                 if turn["speaker"] == "ai_agent"
             ]
@@ -1210,10 +1257,10 @@ class AudioMetricsCalculator:
                 self.calculate_turn_taking_latency(
                     user_speech_turns, agent_speech_turns
                 )
-            )
-            # vad_latency_metrics now includes 'ai_interruptions_handled_in_latency'            # Calculate overlap detection using the combined speaker turns
-            overlap_data = self.detect_overlaps_from_combined_turns(
-                combined_speaker_turns
+            )  # vad_latency_metrics now includes 'ai_interruptions_handled_in_latency'
+            # Calculate overlap detection using raw VAD segments for higher granularity
+            overlap_data = self.detect_overlaps_from_vad_segments(
+                raw_user_vad_segments, raw_agent_vad_segments
             )
 
             # Calculate metrics

@@ -94,13 +94,39 @@ class AudioVisualizer:
         else:
             fig, ax = plt.subplots(figsize=(12, 6))
 
-            # Extract data - use agent_start for x-axis to show when responses occurred
-            start_times = [item["agent_start"] for item in latency_details]
-            latencies = [item["latency_seconds"] for item in latency_details]
-            ratings = [item["rating"] for item in latency_details]
+            # Filter for only AI agent response latencies (user-to-agent transitions)
+            ai_latencies = [
+                item
+                for item in latency_details
+                if item.get("interaction_type", "").startswith("user_to_agent")
+            ]
 
-            # Number each response for clarity
-            response_numbers = list(range(1, len(latency_details) + 1))
+            if not ai_latencies:
+                # No AI response latencies found
+                ax.text(
+                    0.5,
+                    0.5,
+                    "No AI agent response latencies found",
+                    horizontalalignment="center",
+                    verticalalignment="center",
+                    transform=ax.transAxes,
+                    fontsize=14,
+                )
+                plt.tight_layout()
+                img_buffer = BytesIO()
+                plt.savefig(img_buffer, format="png", dpi=150, bbox_inches="tight")
+                img_buffer.seek(0)
+                img_base64 = base64.b64encode(img_buffer.getvalue()).decode()
+                plt.close(fig)
+                return img_base64
+
+            # Extract data - use to_turn_start for x-axis to show when AI responses occurred
+            start_times = [item["to_turn_start"] for item in ai_latencies]
+            latencies = [item["latency_seconds"] for item in ai_latencies]
+            ratings = [item["rating"] for item in ai_latencies]
+
+            # Number each AI response for clarity
+            response_numbers = list(range(1, len(ai_latencies) + 1))
 
             # Define colors for different ratings
             rating_colors = {
@@ -132,15 +158,13 @@ class AudioVisualizer:
                     color=rating_colors.get(label, "gray"),
                     label=f"{label} threshold ({threshold}s)",
                     zorder=2,
-                )
-
-            # Set labels and title
-            title = "VAD-based Turn-taking Latency Timeline"
+                )  # Set labels and title
+            title = "AI Agent Response Latency Timeline"
             if filename:
                 title += f" - {filename}"
             ax.set_title(title)
             ax.set_xlabel("Conversation Time (seconds)")
-            ax.set_ylabel("Response Latency (seconds)")
+            ax.set_ylabel("AI Response Latency (seconds)")
 
             # Set x-axis to show the full conversation duration
             ax.set_xlim(0, duration)
@@ -153,14 +177,14 @@ class AudioVisualizer:
             ax.grid(True, alpha=0.3, zorder=1)
 
             # Add legend
-            ax.legend(loc="upper right")
-
-            # Add annotations for each point showing response number and latency
+            ax.legend(
+                loc="upper right"
+            )  # Add annotations for each point showing AI response number and latency
             for i, (x, y, rating, resp_num) in enumerate(
                 zip(start_times, latencies, ratings, response_numbers)
             ):
                 ax.annotate(
-                    f"#{resp_num}: {y:.1f}s",
+                    f"AI #{resp_num}: {y:.1f}s",
                     (x, y),
                     textcoords="offset points",
                     xytext=(0, 10),
@@ -385,17 +409,19 @@ class AudioVisualizer:
             ),  # Still need separated segments for waveform highlights
         )
 
-        metrics_table = self.generate_metrics_table_html(
-            metrics
-        )  # Generate speech overlap visualization if transcript data is available
-        # Pass overlap_data explicitly to make sure it's included even if there's no transcript
+        metrics_table = self.generate_metrics_table_html(metrics)
+
+        # Prepare data for speech overlap visualization
         transcript_with_overlap = transcript_data or {}
+
+        # Ensure overlap_data is passed directly from metrics
         if "overlap_data" not in transcript_with_overlap and "overlap_data" in metrics:
             transcript_with_overlap = dict(
                 transcript_with_overlap
             )  # Create a copy to avoid modifying the original
             transcript_with_overlap["overlap_data"] = metrics["overlap_data"]
 
+        # Generate speech overlap visualization
         speech_overlap_img = self.generate_speech_overlap_visualization(
             transcript_with_overlap,
             metrics.get("user_vad_segments", []),
@@ -425,7 +451,6 @@ class AudioVisualizer:
 
         Args:
             transcript_data: Transcript data dictionary with words and overlap info
-                             Also contains overlap_data with detailed overlap information
             user_windows: List of (start_time, end_time) tuples for user channel
             agent_windows: List of (start_time, end_time) tuples for agent channel
             duration: Total duration of the audio in seconds
@@ -456,8 +481,15 @@ class AudioVisualizer:
             plt.close(fig)
             return base64.b64encode(buf.read()).decode("utf-8")
 
-        # Get overlap data from transcript data or metrics
+        # Get overlap data directly from metrics["overlap_data"]
         overlap_data = transcript_data.get("overlap_data", {})
+
+        # Extract overlap information
+        overlaps_list = overlap_data.get("overlaps", [])
+        print("debug overlap print in visualization:", overlaps_list)
+        total_overlap_count = overlap_data.get("total_overlap_count", 0)
+        has_ai_interrupting_user = overlap_data.get("has_ai_interrupting_user", False)
+        has_user_interrupting_ai = overlap_data.get("has_user_interrupting_ai", False)
 
         # If we have words, use them for word count statistics
         has_words = "words" in transcript_data
@@ -470,8 +502,12 @@ class AudioVisualizer:
         else:
             words = []
             customer_word_count = 0
-            agent_word_count = 0  # Create figure
-        fig, ax = plt.subplots(figsize=(14, 6))  # Set plot parameters
+            agent_word_count = 0
+
+        # Create figure
+        fig, ax = plt.subplots(figsize=(14, 6))
+
+        # Set plot parameters
         ax.set_xlim(0, duration)
         ax.set_ylim(0, 3)
         ax.set_yticks([1, 2])
@@ -506,9 +542,9 @@ class AudioVisualizer:
             Patch(facecolor="red", alpha=0.7, label="AI Interrupting User"),
             Patch(facecolor="yellow", alpha=0.7, label="User Interrupting AI"),
         ]
-        ax.legend(
-            handles=legend_elements, loc="upper right"
-        )  # Add tick marks for timing
+        ax.legend(handles=legend_elements, loc="upper right")
+
+        # Add tick marks for timing
         if has_words and words:
             # Use word timings if available
             ticks = []
@@ -533,11 +569,12 @@ class AudioVisualizer:
         ax2.set_xticks(ticks)
         ax2.set_xticklabels(labels, rotation=45)
         ax2.tick_params(axis="x", colors="gray")
-        ax2.set_xlabel("Time (seconds)", color="gray")  # Plot user speech segments
-        print("start_str and end_str:", user_windows)
-        for window in user_windows:  # Iterate over the list of dictionaries
-            start = float(window["start"])  # Access the value using the key 'start'
-            end = float(window["end"])  # Access the value using the key 'end'
+        ax2.set_xlabel("Time (seconds)", color="gray")
+
+        # Plot user speech segments
+        for window in user_windows:
+            start = float(window["start"])
+            end = float(window["end"])
             ax.add_patch(
                 plt.Rectangle(
                     (start, 1 - 0.1), end - start, 0.2, color="blue", alpha=0.7
@@ -545,51 +582,47 @@ class AudioVisualizer:
             )
 
         # Plot agent speech segments
-        for window in agent_windows:  # Iterate over the list of dictionaries
-            start = float(window["start"])  # Access the value using the key 'start'
-            end = float(window["end"])  # Access the value using the key 'end'
+        for window in agent_windows:
+            start = float(window["start"])
+            end = float(window["end"])
             ax.add_patch(
                 plt.Rectangle(
                     (start, 2 - 0.1), end - start, 0.2, color="green", alpha=0.7
                 )
             )
 
-        # If we have words, plot them with thin lines for better granularity
-        if words:
-            for word in words:
-                start = word["start"]
-                end = word["end"]
-                speaker = word["speaker"]
+        # Calculate total durations for statistics
+        total_user_duration = sum(
+            float(window["end"]) - float(window["start"]) for window in user_windows
+        )
+        total_agent_duration = sum(
+            float(window["end"]) - float(window["start"]) for window in agent_windows
+        )
+        total_audio_duration = duration  # In seconds
 
-                # Determine y-position based on speaker
-                y_pos = 1 if speaker == "customer" else 2
-
-                # Draw thin line for the word timing
-                ax.add_patch(
-                    plt.Rectangle(
-                        (start, y_pos - 0.05),
-                        end - start,
-                        0.1,
-                        color="black",
-                        alpha=0.3,
-                        linewidth=0.5,
-                    )
-                )
-
-        # Plot overlaps from overlap_data with different colors based on who interrupted
-        overlaps_list = overlap_data.get(
-            "overlaps", []
-        )  # Get overlap information from the overlap_data
-        total_overlap_count = overlap_data.get("total_overlap_count", 0)
-
+        # Plot overlaps with different colors based on who interrupted
         total_overlap_duration = 0
+        ai_interrupting_count = 0
+        user_interrupting_count = 0
+        ai_interrupting_duration = 0
+        user_interrupting_duration = 0
+
         for overlap_item in overlaps_list:
             start = float(overlap_item["start"])
-            overlap_duration_val = float(overlap_item["duration"])  # Renamed to avoid conflict
+            end = float(overlap_item["end"])
+            overlap_duration_val = float(overlap_item["duration"])
             interrupter = overlap_item["interrupter"]
-            interrupted_party = overlap_item.get("interrupted")  # Get interrupted party
+            interrupted_party = overlap_item["interrupted"]
 
             total_overlap_duration += overlap_duration_val
+
+            # Count interruptions by type
+            if interrupter == "ai_agent":
+                ai_interrupting_count += 1
+                ai_interrupting_duration += overlap_duration_val
+            elif interrupter == "user":
+                user_interrupting_count += 1
+                user_interrupting_duration += overlap_duration_val
 
             color = None
             y_rect_base = None
@@ -623,34 +656,18 @@ class AudioVisualizer:
                 # Add text for the duration of the overlap, ensuring it's readable
                 ax.text(
                     start + overlap_duration_val / 2,
-                    y_rect_base + rect_height / 2,  # Vertically centered on the overlap bar
+                    y_rect_base
+                    + rect_height / 2,  # Vertically centered on the overlap bar
                     f"{overlap_duration_val:.2f}s",
                     ha="center",
                     va="center",
                     fontsize=7,
                     color="black",  # Black text for better contrast on red/yellow
-                    bbox=dict(boxstyle="round,pad=0.15", fc="white", alpha=0.65),  # Background for text
+                    bbox=dict(
+                        boxstyle="round,pad=0.15", fc="white", alpha=0.65
+                    ),  # Background for text
                     zorder=5,  # Ensure text is above the overlap bar
                 )
-                # Calculate statistics about overlaps
-        ai_interrupting_count = sum(
-            1 for ovp in overlaps_list if ovp["interrupter"] == "ai_agent"
-        )
-        user_interrupting_count = sum(
-            1 for ovp in overlaps_list if ovp["interrupter"] == "user"
-        )
-
-        ai_interrupting_duration = sum(
-            ovp["duration"] for ovp in overlaps_list if ovp["interrupter"] == "ai_agent"
-        )
-        user_interrupting_duration = sum(
-            ovp["duration"] for ovp in overlaps_list if ovp["interrupter"] == "user"
-        )
-
-        # Calculate total durations of speech for percentage calculations
-        total_user_duration = sum(float(window['end']) - float(window['start']) for window in user_windows)
-        total_agent_duration = sum(float(window['end']) - float(window['start']) for window in agent_windows)
-        total_audio_duration = duration  # In seconds
 
         # Add detailed statistics
         stats_text = "Overlapping Speech Analysis:\n"
@@ -660,10 +677,10 @@ class AudioVisualizer:
             overlap_percent = (total_overlap_duration / total_audio_duration) * 100
             stats_text += f"• Overlap: {overlap_percent:.1f}% of audio duration\n"
 
-            if ai_interrupting_count > 0:
+            if has_ai_interrupting_user:
                 stats_text += f"• AI Interrupting User: {ai_interrupting_count} times ({ai_interrupting_duration:.2f}s)\n"
 
-            if user_interrupting_count > 0:
+            if has_user_interrupting_ai:
                 stats_text += f"• User Interrupting AI: {user_interrupting_count} times ({user_interrupting_duration:.2f}s)\n"
 
         # Add word count stats if available
@@ -675,7 +692,9 @@ class AudioVisualizer:
         # Add speaking time stats
         stats_text += "\nSpeaking Time:\n"
         stats_text += f"• User: {total_user_duration:.2f}s ({(total_user_duration / total_audio_duration) * 100:.1f}%)\n"
-        stats_text += f"• AI: {total_agent_duration:.2f}s ({(total_agent_duration / total_audio_duration) * 100:.1f}%)"  # Create a text box with statistics
+        stats_text += f"• AI: {total_agent_duration:.2f}s ({(total_agent_duration / total_audio_duration) * 100:.1f}%)"
+
+        # Create a text box with statistics
         props = dict(boxstyle="round", facecolor="white", alpha=0.8)
         ax.text(
             0.01,

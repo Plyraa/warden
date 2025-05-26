@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 from audio_metrics import AudioMetricsCalculator
 from database import init_db
 from fastapi.middleware.cors import CORSMiddleware
-from web_ui import app as flask_app
+from web_app import app as web_app
 
 
 class AudioFileList(BaseModel):
@@ -227,9 +227,12 @@ def analyze_batch(audio_files: AudioFileList):
     return results
 
 
-def start_flask_app(host="127.0.0.1", port=5000):
-    """Start Flask app with specified host and port"""
-    flask_app.run(host=host, port=port, debug=False)
+def start_web_app(host="127.0.0.1", port=5000, threads=4):
+    """Start web app with Waitress WSGI server"""
+    from server import run_flask_app
+    
+    # Run the web application with Waitress
+    run_flask_app(host, port, threads)
 
 
 if __name__ == "__main__":

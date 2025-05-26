@@ -3,7 +3,6 @@ import os
 import multiprocessing
 
 from audio_metrics import AudioMetricsCalculator
-from web_ui import app as flask_app
 from database import init_db  # Added to initialize DB on startup
 
 
@@ -75,48 +74,47 @@ def print_metrics_summary(metrics):
     print("-" * 50)
 
 
-def start_web_interface(host="127.0.0.1", port=5000):
-    """Start the web interface"""
-    print(f"Starting web interface at http://{host}:{port}")
-    flask_app.run(host=host, port=port, debug=False)
-
-
-def run_flask_app(host, port):
+def start_web_interface(host="127.0.0.1", port=5000, threads=4):
     """
-    Function to run the Flask app in a multiprocessing context
+    Start the web UI using Waitress WSGI server.
     
     Args:
         host: Host address to bind to
         port: Port to listen on
+        threads: Number of worker threads for Waitress
     """
-    flask_app.run(host=host, port=port, debug=False)
+    try:
+        # Use the consolidated server module
+        from server import run_flask_app
+        run_flask_app(host, port, threads)
+    except Exception as e:
+        # Log any errors that might occur during startup
+        print(f"Error starting web interface: {str(e)}")
+        print("Please ensure Waitress is installed: pip install waitress")
 
-def start_fastapi_server(host="127.0.0.1", port=8000, start_gui=False):
+def start_fastapi_server(host="127.0.0.1", port=8000, start_gui=False, threads=4):
     """
     Start the FastAPI server with optional web UI
     
     Args:
         host: Host address for FastAPI server
         port: Port for FastAPI server
-        start_gui: Whether to also start the Flask web UI
+        start_gui: Whether to also start the web UI with Waitress
+        threads: Number of Waitress worker threads
     """
-    # Import here to avoid circular imports
-    from fastapi_server import app
-    import uvicorn
-
-    # Start Flask web UI in a separate process if requested
-    if start_gui:
-        print(f"Starting Web UI at http://{host}:5000")
-        flask_process = multiprocessing.Process(
-            target=run_flask_app,
-            args=(host, 5000)
-        )
-        flask_process.daemon = True
-        flask_process.start()
-
-    # Start FastAPI server
-    print(f"Starting FastAPI server at http://{host}:{port}")
-    uvicorn.run(app, host=host, port=port)
+    try:
+        # Use the consolidated server module
+        if start_gui:
+            # Run both FastAPI and Flask UI
+            from server import run_combined
+            run_combined(host, port, 5000, threads)
+        else:
+            # Run only FastAPI
+            from server import run_fastapi_app
+            run_fastapi_app(host, port)
+    except Exception as e:
+        print(f"Error starting server: {str(e)}")
+        print("Please check that all dependencies are installed")
 
 
 def main():
@@ -142,8 +140,7 @@ def main():
     parser.add_argument(
         "--process",
         action="store_true",
-        help="Process audio files instead of starting servers",
-    )
+        help="Process audio files instead of starting servers",    )
     parser.add_argument(
         "--web",
         action="store_true",
@@ -156,15 +153,16 @@ def main():
     parser.add_argument(
         "--port", type=int, default=5000, help="Port for web interface (legacy)"
     )
+    parser.add_argument(
+        "--workers", type=int, default=4, help="Number of Waitress worker threads"
+    )
 
     args = parser.parse_args()
 
     # Ensure output directory exists
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
-        print(f"Created output directory: {os.path.abspath(args.output_dir)}")
-
-    # Choose operation mode
+        print(f"Created output directory: {os.path.abspath(args.output_dir)}")    # Choose operation mode
     if args.process:
         # Process audio files mode
         print("Processing audio files")
@@ -172,10 +170,9 @@ def main():
     elif args.web:
         # Legacy mode: only web UI
         print("Starting web interface only (legacy mode)")
-        start_web_interface(args.host, args.port)
-    else:
-        # Default mode: start FastAPI server with optional GUI
-        start_fastapi_server(args.host, args.api_port, args.gui)
+        start_web_interface(args.host, args.port, args.workers)
+    else:        # Default mode: start FastAPI server with optional GUI
+        start_fastapi_server(args.host, args.api_port, args.gui, args.workers)
 
 
 if __name__ == "__main__":

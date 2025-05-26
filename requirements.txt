@@ -1,5 +1,6 @@
 elevenlabs==2.1.0
 fastapi==0.115.12
+waitress==3.0.0  # WSGI server compatible with all platforms
 Flask==3.1.1
 librosa==0.11.0
 matplotlib==3.10.3

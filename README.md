@@ -7,7 +7,7 @@
 Warden is a comprehensive audio analysis system designed for evaluating AI agent call quality. It consists of two main components:
 
 1. **FastAPI Server** - Backend service that handles batch processing of audio files and exposes RESTful API endpoints
-2. **Flask Web UI** - Frontend interface for interactive analysis and visualization of audio data
+2. **Web UI** - Frontend interface for interactive analysis and visualization of audio data served by Waitress
 
 ### System Architecture
 
@@ -17,7 +17,7 @@ Warden is a comprehensive audio analysis system designed for evaluating AI agent
                     │  FastAPI Server     │ ◄─── REST API (Port 8000)
                     │  - Audio Analysis   │      - Batch processing
                     │  - Metrics          │      - JSON input/output
-                    │  - Database         │
+                    │  - Database         │      - Served by Uvicorn
                     │                     │
                     └─────────┬───────────┘
                               │
@@ -27,10 +27,11 @@ Warden is a comprehensive audio analysis system designed for evaluating AI agent
                               ▼
 ┌─────────────────────────────────────────────────┐
 │                                                 │
-│  Flask Web UI (Port 5000)                       │
+│  Web UI (Port 5000) served by Waitress          │
 │  - Interactive visualization                    │
 │  - Audio file selection                         │
 │  - Metrics display                              │
+│  - Multiple worker processes for scalability    │
 │                                                 │
 └─────────────────────────────────────────────────┘
 ```
@@ -40,6 +41,82 @@ Warden is a comprehensive audio analysis system designed for evaluating AI agent
 - **AudioMetricsCalculator**: Processes audio files to extract metrics like latency, overlap, and talk ratio
 - **Database**: SQLite storage for analyzed audio metrics
 - **Visualization**: Generates visual representations of audio analysis
+- **Server**: Consolidated server module that can run both FastAPI and Flask applications
+
+### File Structure
+
+```
+warden/
+├── audio_metrics.py       # Core audio analysis functionality
+├── database.py            # Database management and models
+├── fastapi_server.py      # FastAPI implementation for REST API
+├── server.py              # Consolidated server module (runs both FastAPI & Flask)
+├── web_app.py             # Flask web application for UI
+├── wsgi.py                # WSGI entry point for Flask application
+├── visualization.py       # Data visualization module
+├── warden.py              # Main command-line interface
+├── requirements.txt       # Project dependencies
+├── static/                # Static assets for web UI
+├── templates/             # HTML templates for web UI
+├── database/              # Database files
+├── sampled_test_calls/    # Processed audio files
+└── stereo_test_calls/     # Original audio input files
+```
+
+## Setup and Running
+
+### Installation
+
+1. Create a Python virtual environment (Python 3.10+ recommended):
+   ```bash
+   python -m venv env
+   ```
+
+2. Activate the virtual environment:
+   ```bash
+   # On Windows:
+   env\Scripts\activate
+
+   # On macOS/Linux:
+   source env/bin/activate
+   ```
+
+3. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+### Running the Application
+
+#### Starting Both FastAPI and Web UI
+
+```bash
+# Start both servers (FastAPI and Web UI)
+python server.py
+
+# Alternative using the main CLI:
+python warden.py --gui --host 127.0.0.1 --api-port 8000
+```
+
+#### Starting Only FastAPI Server
+
+```bash
+# Start only the FastAPI server
+python server.py --api-only
+
+# Alternative using the main CLI:
+python warden.py --host 127.0.0.1 --api-port 8000
+```
+
+#### Starting Only Web UI
+
+```bash
+# Start only the Web UI
+python server.py --web-only
+
+# Alternative using the main CLI:
+python warden.py --web --port 5000
+```
 
 ## Integration Guide for Third-Party Systems
 
@@ -152,7 +229,7 @@ This project provides tools for analyzing audio recordings of Jotform AI Agent c
 
 ### Running the Server
 
-Warden now offers multiple ways to run the application:
+Warden offers multiple ways to run the application:
 
 1. **Default Mode - FastAPI Server**:
    ```bash
@@ -164,15 +241,32 @@ Warden now offers multiple ways to run the application:
    ```bash
    python .\warden.py --gui
    ```
-   This starts both the FastAPI server at `http://127.0.0.1:8000` and the Web UI at `http://127.0.0.1:5000`.
+   This starts both the FastAPI server at `http://127.0.0.1:8000` and the Web UI at `http://127.0.0.1:5000` with Waitress.
 
-3. **Legacy Web-only Mode**:
+3. **Web-only Mode**:
    ```bash
    python .\warden.py --web
    ```
-   This starts only the web interface at `http://127.0.0.1:5000` (for backward compatibility).
+   This starts only the web interface at `http://127.0.0.1:5000` using Waitress.
    
-4. **Processing Mode**:
+   You can control the number of Waitress worker threads with the `--workers` parameter:
+   ```bash
+   python .\warden.py --web --workers 8
+   ```
+
+4. **Direct Server Control**:
+   ```bash
+   # Start both servers (recommended)
+   python .\server.py
+   
+   # Start only FastAPI server
+   python .\server.py --api-only
+   
+   # Start only Web UI
+   python .\server.py --web-only
+   ```
+   
+5. **Processing Mode**:
    ```bash
    python .\warden.py --process
    ```
@@ -287,6 +381,51 @@ This data is visualized in several ways:
 2. Highlighted overlap regions in red
 3. Statistical analysis of overlap frequency
 4. Transcript with overlapping words highlighted
+
+## Technical Architecture
+
+### Server Architecture
+
+The server architecture has been simplified and consolidated. The new design uses:
+
+- **Waitress** as the WSGI server for the Flask web UI (replacing Gunicorn)
+- **Uvicorn** as the ASGI server for FastAPI
+
+The `server.py` module is the central component that can:
+1. Run either server independently
+2. Run both servers simultaneously (with web UI in a separate process)
+3. Handle command-line arguments for flexible configuration
+
+```
+┌─────────────────────────────────────────┐
+│             server.py                   │
+├─────────────┬─────────────┬─────────────┤
+│ run_flask   │ run_fastapi │ run_combined│
+│   (web UI)  │   (API)     │ (both)      │
+└─────┬───────┴──────┬──────┴──────┬──────┘
+      │              │             │
+      ▼              ▼             │
+┌─────────────┐ ┌────────────┐    │
+│  Waitress   │ │  Uvicorn   │    │
+│  (WSGI)     │ │  (ASGI)    │    │
+└──────┬──────┘ └─────┬──────┘    │
+       │              │           │
+       ▼              ▼           │
+┌─────────────┐ ┌────────────┐    │
+│  Flask App  │ │ FastAPI App│◄───┘
+│  (web_app)  │ │(fastapi_   │
+│             │ │  server)   │
+└─────────────┘ └────────────┘
+```
+
+### Data Flow
+
+1. Audio files are processed by the `AudioMetricsCalculator` which extracts metrics
+2. Results are stored in the SQLite database via SQLAlchemy models
+3. The FastAPI server provides RESTful endpoints for batch processing
+4. The web UI visualizes metrics and allows interactive exploration
+
+Both interfaces share the same underlying `AudioMetricsCalculator` and database components.
 
 ## Setting Up Transcription
 

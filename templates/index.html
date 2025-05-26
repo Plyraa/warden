@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Call Center Audio Analysis</title>
+    <title>Warden</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -198,10 +198,9 @@
 </head>
 <body>
     <div class="container">
-        <h1>Call Center Audio Analysis</h1>
-        
-        <div class="file-selector">
-            <h3>Select Audio File</h3>
+        <h1>Warden</h1>          <div class="file-selector">
+            <h3>Select Audio File <span id="refreshAudioFiles" style="font-size: 0.8em; padding: 3px 8px; cursor: pointer; color: #0066cc;">↻</span></h3>
+            <div id="refreshStatus" style="font-size: 0.8em; color: #666; margin-bottom: 5px;"></div>
             <form id="audioForm">
                 <select id="audioFile" required>
                     <option value="">-- Select a file --</option>
@@ -259,21 +258,25 @@
                 </div>
             </div>
         </div>
-    </div>
-
-    <script>
+    </div>    <script>
         document.addEventListener('DOMContentLoaded', function() {
-            fetch('/get_audio_files')
-                .then(response => response.json())
-                .then(data => {
-                    const selectElement = document.getElementById('audioFile');
-                    data.forEach(file => {
-                        const option = document.createElement('option');
-                        option.value = file;
-                        option.textContent = file;
-                        selectElement.appendChild(option);
-                    });
-                });
+            const statusElement = document.getElementById('refreshStatus');
+            const audioFileSelector = document.getElementById('audioFile');
+            
+            // Initial load of audio files
+            refreshAudioFilesList();
+              // Add click handler for refresh icon
+            document.getElementById('refreshAudioFiles').addEventListener('click', function() {
+                // Only show status for manual refresh, since that's an explicit action
+                statusElement.textContent = "Refreshing file list...";
+                refreshAudioFilesList();
+            });
+            
+            // Add click handler for selector to refresh when opened
+            audioFileSelector.addEventListener('mousedown', function() {
+                // Don't update status text for automatic refreshes
+                refreshAudioFilesList();
+            });
                 
             document.getElementById('audioForm').addEventListener('submit', function(e) {
                 e.preventDefault();
@@ -334,7 +337,52 @@
                     const tabId = this.getAttribute('data-tab');
                     document.getElementById(tabId).classList.add('active');
                 });
-            });
+            });            // Function to refresh the audio files list
+            function refreshAudioFilesList() {
+                console.log("Refreshing audio files list...");
+                const statusElement = document.getElementById('refreshStatus');
+                const isManualRefresh = statusElement.textContent.includes("Refreshing");
+                const timestamp = new Date().getTime();
+                
+                // Add timestamp to prevent caching
+                fetch(`/get_audio_files?_=${timestamp}`)
+                    .then(response => response.json())
+                    .then(data => {
+                        console.log(`Retrieved ${data.length} audio files:`, data);
+                        const selectElement = document.getElementById('audioFile');
+                        // Store current selection if any
+                        const currentSelection = selectElement.value;
+                        const initialCount = selectElement.options.length - 1; // Subtract 1 for default option
+                        
+                        // Clear existing options except the first one
+                        while (selectElement.options.length > 1) {
+                            selectElement.remove(1);
+                        }
+                        
+                        // Add new options
+                        data.forEach(file => {
+                            const option = document.createElement('option');
+                            option.value = file;
+                            option.textContent = file;
+                            // Re-select the previously selected option if it still exists
+                            if (file === currentSelection) {
+                                option.selected = true;
+                            }
+                            selectElement.appendChild(option);
+                        });
+                          // Update status only if the file count changed
+                        const newCount = data.length;
+                        if (newCount !== initialCount) {
+                            statusElement.textContent = `Updated! Found ${newCount} files (was ${initialCount}).`;
+                            statusElement.style.color = '#28a745'; // Green for changes
+                        }
+                    })                    .catch(error => {
+                        console.error('Error fetching audio files:', error);
+                        // Always show errors, regardless of whether it was manual or automatic refresh
+                        statusElement.textContent = 'Error refreshing file list.';
+                        statusElement.style.color = '#dc3545'; // Red for errors
+                    });
+            }
             
             function displayTranscriptAsChatBubbles(words, isPlaceholder) {
                 const transcriptContainer = document.getElementById('transcriptContainer');

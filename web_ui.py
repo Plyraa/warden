@@ -36,10 +36,17 @@ def index():
 @app.route("/get_audio_files")
 def get_audio_files():
     audio_files = []
+    # Reset directory listing to avoid caching
     for filename in os.listdir("stereo_test_calls"):
         if filename.endswith(".mp3") or filename.endswith(".wav"):
             audio_files.append(filename)
-    return jsonify(audio_files)
+
+    # Add cache-prevention headers
+    response = jsonify(audio_files)
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 
 @app.route("/audio/<filename>")

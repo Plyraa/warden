@@ -5,3 +5,4 @@ sampled_test_calls/
 database/audio_analysis.db
 UPDATE_INSTRUCTIONS.md
 elevenlabs test/
+env/

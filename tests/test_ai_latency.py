@@ -51,7 +51,7 @@ def test_ai_response_latency():
     # Calculate latencies
     stats, details = calc.calculate_turn_taking_latency(user_segments, agent_segments)
 
-    print(f"Overall Statistics:")
+    print("Overall Statistics:")
     for key, value in stats.items():
         if isinstance(value, float):
             print(f"  {key}: {value:.3f}s")
@@ -63,18 +63,18 @@ def test_ai_response_latency():
         d for d in details if d.get("interaction_type", "").startswith("user_to_agent")
     ]
 
-    print(f"\nAI Agent Response Analysis:")
+    print("\nAI Agent Response Analysis:")
     print(f"Total conversation turns: {len(details)}")
     print(f"AI responses to user: {len(ai_responses)}")
 
     if ai_responses:
         ai_latencies = [d["latency_seconds"] for d in ai_responses]
-        print(f"\nAI Response Latencies:")
+        print("\nAI Response Latencies:")
         print(f"  Average: {sum(ai_latencies) / len(ai_latencies):.3f}s")
         print(f"  Min: {min(ai_latencies):.3f}s")
         print(f"  Max: {max(ai_latencies):.3f}s")
 
-        print(f"\nDetailed AI Responses (what visualization will show):")
+        print("\nDetailed AI Responses (what visualization will show):")
         for i, response in enumerate(ai_responses, 1):
             print(f"  AI Response {i}:")
             print(f"    Time: {response['to_turn_start']:.1f}s")
@@ -94,21 +94,21 @@ def test_visualization_data():
     ai_responses = test_ai_response_latency()
 
     if ai_responses:
-        print(f"\nData that visualization will receive:")
-        print(f"Fields available in each latency detail:")
+        print("\nData that visualization will receive:")
+        print("Fields available in each latency detail:")
         sample = ai_responses[0]
         for key in sorted(sample.keys()):
             print(f"  {key}: {sample[key]}")
 
-        print(f"\nVisualization will filter for items where:")
-        print(f"  interaction_type.startswith('user_to_agent') = True")
+        print("\nVisualization will filter for items where:")
+        print("  interaction_type.startswith('user_to_agent') = True")
         print(f"  This gives us {len(ai_responses)} data points to plot")
 
-        print(f"\nPlot data:")
-        print(f"  X-axis (time): [to_turn_start values]")
-        print(f"  Y-axis (latency): [latency_seconds values]")
-        print(f"  Colors: Based on [rating values]")
-        print(f"  Labels: AI #1, AI #2, etc.")
+        print("\nPlot data:")
+        print("  X-axis (time): [to_turn_start values]")
+        print("  Y-axis (latency): [latency_seconds values]")
+        print("  Colors: Based on [rating values]")
+        print("  Labels: AI #1, AI #2, etc.")
 
 
 if __name__ == "__main__":

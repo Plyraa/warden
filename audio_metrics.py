@@ -392,11 +392,10 @@ class AudioMetricsCalculator:
         speech_timestamps = get_speech_timestamps(
             tensor_audio,
             model,
-            threshold=0.5,  # Higher threshold means more aggressive voice activity detection
+            threshold=0.72,  # Higher threshold means more aggressive voice activity detection
             sampling_rate=self.sampling_rate,
             min_silence_duration_ms=100,  # Minimum silence duration between speech chunks in ms
-            min_speech_duration_ms=250,  # Minimum speech duration to be detected
-            window_size_samples=512,  # Window size for processing
+            min_speech_duration_ms=200,  # Minimum speech duration to be detected
             return_seconds=True,  # Get timestamps directly in seconds
         )
         """
@@ -404,6 +403,11 @@ class AudioMetricsCalculator:
         [{'end': 2.1, 'start': 0.0},
         {'end': 4.9, 'start': 2.7},
         {'end': 6.8, 'start': 5.0}]
+        about thresholds: https://github.com/snakers4/silero-vad/wiki/FAQ#which-sampling-rate-and-chunk-size-to-choose-from
+        tried thresholds:
+        0.5 - default, too many false positives if noise is present at customer side.
+        0.7 - not bad actually, but still some false positives. this is live threshold for production.
+        0.85 - too aggressive, misses some entire speech segments.
         """
         # Print raw Silero VAD timestamps for debugging
         print(
@@ -760,6 +764,10 @@ class AudioMetricsCalculator:
 
         # Only consider pitches with high magnitude
         pitches_flat = pitches[magnitudes > np.median(magnitudes)]
+
+        # TODO: Normally I aim to find points when AI agent's voice gone wild, but
+        # this could be an extreme value that gets filtered by next line. I need
+        # some broken audio to test this.
 
         # Filter out extreme values (noise)
         valid_pitches = pitches_flat[(pitches_flat > 50) & (pitches_flat < 500)]

@@ -217,6 +217,29 @@ class AudioVisualizer:
         """
         vad_latency_metrics = metrics.get("vad_latency_metrics", {})
 
+        # Get overlap data
+        overlap_data = metrics.get("overlap_data", {})
+        overlaps = overlap_data.get("overlaps", [])
+
+        # Count overlaps by type
+        ai_interrupting_count = 0
+        user_interrupting_count = 0
+        ai_interrupting_duration = 0
+        user_interrupting_duration = 0
+
+        # Process each overlap
+        for overlap_item in overlaps:
+            overlap_duration_val = float(overlap_item["duration"])
+            interrupter = overlap_item["interrupter"]
+
+            # Count interruptions by type
+            if interrupter == "ai_agent":
+                ai_interrupting_count += 1
+                ai_interrupting_duration += overlap_duration_val
+            elif interrupter == "user":
+                user_interrupting_count += 1
+                user_interrupting_duration += overlap_duration_val
+
         # Check if we have VAD metrics
         has_vad_metrics = vad_latency_metrics and all(
             value is not None for value in vad_latency_metrics.values()
@@ -277,37 +300,32 @@ class AudioVisualizer:
                     <tr>
                         <td>Average Latency</td>
                         <td>{:.2f} s <span class="{}">({} rating)</span></td>
-                        <td>Average response latency for AI agent (interrupted turns excluded)</td>
+                        <td>Average response latency for AI agent </td>
                     </tr>
                     <tr>
                         <td>Min Latency</td>
                         <td>{:.2f} s</td>
-                        <td>Minimum response latency (interrupted turns excluded)</td>
+                        <td>Minimum response latency</td>
                     </tr>
                     <tr>
                         <td>Max Latency</td>
                         <td>{:.2f} s</td>
-                        <td>Maximum response latency (interrupted turns excluded)</td>
+                        <td>Maximum response latency</td>
                     </tr>
                     <tr>
                         <td>P10 Latency</td>
                         <td>{:.2f} s</td>
-                        <td>10th percentile response latency (interrupted turns excluded)</td>
+                        <td>10th percentile response latency</td>
                     </tr>
                     <tr>
                         <td>P50 Latency (Median)</td>
                         <td>{:.2f} s</td>
-                        <td>50th percentile response latency (interrupted turns excluded)</td>
+                        <td>50th percentile response latency</td>
                     </tr>
                     <tr>
                         <td>P90 Latency</td>
                         <td>{:.2f} s</td>
-                        <td>90th percentile response latency (interrupted turns excluded)</td>
-                    </tr>
-                    <tr>
-                        <td>AI Interruptions Handled</td>
-                        <td>{}</td>
-                        <td>Number of AI interruptions skipped for latency calculation</td>
+                        <td>90th percentile response latency</td>
                     </tr>
                 </table>
             </div>
@@ -330,9 +348,14 @@ class AudioVisualizer:
                         <td>Whether user interrupted the AI</td>
                     </tr>
                     <tr>
-                        <td>Total Overlap Count</td>
-                        <td>{}</td>
-                        <td>Total number of speech overlaps detected</td>
+                        <td>Agent Overlaps</td>
+                        <td>{} (Duration: {:.2f}s)</td>
+                        <td>Number of times the AI agent overlapped with user speech</td>
+                    </tr>
+                    <tr>
+                        <td>User Overlaps</td>
+                        <td>{} (Duration: {:.2f}s)</td>
+                        <td>Number of times the user overlapped with AI agent speech</td>
                     </tr>
                     <tr>
                         <td>Talk Ratio (Agent/User)</td>
@@ -361,14 +384,13 @@ class AudioVisualizer:
             vad_latency_metrics.get("p10_latency", 0) if has_vad_metrics else 0,
             vad_latency_metrics.get("p50_latency", 0) if has_vad_metrics else 0,
             vad_latency_metrics.get("p90_latency", 0) if has_vad_metrics else 0,
-            vad_latency_metrics.get("ai_interruptions_handled_in_latency", 0)
-            if has_vad_metrics
-            else 0,  # New metric            # Other metrics
+            # Other metrics
             "Yes" if metrics["ai_interrupting_user"] else "No",
             "Yes" if metrics["user_interrupting_ai"] else "No",
-            metrics.get("overlap_data", {}).get(
-                "total_overlap_count", 0
-            ),  # Add total overlap count
+            ai_interrupting_count,
+            ai_interrupting_duration,
+            user_interrupting_count,
+            user_interrupting_duration,
             metrics["talk_ratio"],
             metrics["average_pitch"],
             metrics["words_per_minute"],

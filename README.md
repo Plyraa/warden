@@ -1,6 +1,137 @@
 # Audio Analysis for Jotform AI Agent Calls
 
-This project provides tools for analyzing audio recordings of Jotform AI Agent calls. It can process audio files to extract various metrics and offers a web interface for visualizing these metrics.
+# Warden Architecture and Integration Guide
+
+## Architecture Overview
+
+Warden is a comprehensive audio analysis system designed for evaluating AI agent call quality. It consists of two main components:
+
+1. **FastAPI Server** - Backend service that handles batch processing of audio files and exposes RESTful API endpoints
+2. **Flask Web UI** - Frontend interface for interactive analysis and visualization of audio data
+
+### System Architecture
+
+```
+                    ┌─────────────────────┐
+                    │                     │
+                    │  FastAPI Server     │ ◄─── REST API (Port 8000)
+                    │  - Audio Analysis   │      - Batch processing
+                    │  - Metrics          │      - JSON input/output
+                    │  - Database         │
+                    │                     │
+                    └─────────┬───────────┘
+                              │
+                              │ Shared components
+                              │ - AudioMetricsCalculator
+                              │ - Database
+                              ▼
+┌─────────────────────────────────────────────────┐
+│                                                 │
+│  Flask Web UI (Port 5000)                       │
+│  - Interactive visualization                    │
+│  - Audio file selection                         │
+│  - Metrics display                              │
+│                                                 │
+└─────────────────────────────────────────────────┘
+```
+
+### Core Components
+
+- **AudioMetricsCalculator**: Processes audio files to extract metrics like latency, overlap, and talk ratio
+- **Database**: SQLite storage for analyzed audio metrics
+- **Visualization**: Generates visual representations of audio analysis
+
+## Integration Guide for Third-Party Systems
+
+### Using the FastAPI Endpoint
+
+The FastAPI server provides a simple REST API for batch processing audio files. To integrate with Warden:
+
+#### Endpoint Details:
+- **URL**: `http://127.0.0.1:8000/batch`
+- **Method**: POST
+- **Content-Type**: application/json
+
+#### Request Format:
+```json
+{
+  "file_paths": [
+    "/path/to/local/file.mp3",
+    "https://example.com/audio/file.mp3"
+  ]
+}
+```
+
+#### Input Options:
+- **Local files**: Provide absolute paths to MP3 files on the server
+- **Remote files**: Provide URLs to MP3 files (will be downloaded automatically)
+
+#### Response Format:
+```json
+[
+  {
+    "file_path": "/path/to/file.mp3",
+    "filename": "file.mp3",
+    "latency_points": [
+      {"moment": "AI response", "time": 1.24},
+      {"moment": "User response", "time": 0.89}
+    ],
+    "average_latency": 1.07,
+    "p50_latency": 1.07,
+    "p90_latency": 1.22,
+    "min_latency": 0.89,
+    "max_latency": 1.24,
+    "ai_interrupting_user": false,
+    "user_interrupting_ai": false,
+    "ai_user_overlap_count": 0,
+    "user_ai_overlap_count": 0,
+    "talk_ratio": 0.65,
+    "average_pitch": 142.3,
+    "words_per_minute": 128.5
+  }
+]
+```
+
+### Sample Integration Code
+
+```python
+import requests
+import json
+
+def analyze_audio_files(file_paths):
+    """
+    Send audio files for analysis using Warden API
+    
+    Args:
+        file_paths: List of local file paths or URLs
+        
+    Returns:
+        List of analysis results or None if request failed
+    """
+    try:
+        # Prepare the request
+        url = "http://127.0.0.1:8000/batch"
+        payload = {"file_paths": file_paths}
+        
+        # Send the request
+        response = requests.post(url, json=payload)
+        response.raise_for_status()
+        
+        # Return the analysis results
+        return response.json()
+        
+    except Exception as e:
+        print(f"Error analyzing audio files: {str(e)}")
+        return None
+
+# Example usage
+results = analyze_audio_files([
+    "C:/path/to/call_recording.mp3", 
+    "https://example.com/call_recording.mp3"
+])
+```
+
+This project provides tools for analyzing audio recordings of Jotform AI Agent calls. It can process audio files to extract various metrics and offers both a web interface for visualization and API endpoints for automated analysis.
 
 ## Requirements
 
@@ -19,15 +150,82 @@ This project provides tools for analyzing audio recordings of Jotform AI Agent c
 
 ## Usage
 
-### Web Interface (Recommended)
+### Running the Server
 
-To start the web interface for visualizing audio metrics:
+Warden now offers multiple ways to run the application:
 
+1. **Default Mode - FastAPI Server**:
+   ```bash
+   python .\warden.py
+   ```
+   This starts only the FastAPI server at `http://127.0.0.1:8000` for batch processing.
+
+2. **Full Mode - FastAPI + Web UI**:
+   ```bash
+   python .\warden.py --gui
+   ```
+   This starts both the FastAPI server at `http://127.0.0.1:8000` and the Web UI at `http://127.0.0.1:5000`.
+
+3. **Legacy Web-only Mode**:
+   ```bash
+   python .\warden.py --web
+   ```
+   This starts only the web interface at `http://127.0.0.1:5000` (for backward compatibility).
+   
+4. **Processing Mode**:
+   ```bash
+   python .\warden.py --process
+   ```
+   This processes all audio files in the input directory without starting any servers.
+
+You can also use the provided batch script for convenience:
 ```bash
-python .\warden.py --web
+.\start_api_server.bat
 ```
 
-This will start the server at `http://127.0.0.1:5000`. You can then open this URL in your web browser to access the application.
+#### API Endpoints
+
+The FastAPI server provides the following endpoints:
+
+1. **Web Interface**: `http://127.0.0.1:5000`
+   - The original web interface for interactive analysis
+
+2. **Batch Analysis**: `POST http://127.0.0.1:8000/batch`
+   - Analyze multiple audio files in one request
+   - Request format: JSON with file paths or URLs
+   ```json
+   {
+     "file_paths": [
+       "path/to/file1.mp3",
+       "path/to/file2.mp3",
+       "https://example.com/path/to/file3.mp3"
+     ]
+   }
+   ```
+   - Both local file paths and URLs are supported
+   - URLs will be downloaded automatically by the server
+   - Returns detailed metrics for each file, including:
+     - Turn-taking latency points (moment and time)
+     - Average, median (P50), P90, min, max latency
+     - AI and user interruption info
+     - Overlap counts
+     - Talk ratio
+     - Average pitch
+     - Words per minute
+
+#### Example Usage
+
+Use the included example client to test the batch API:
+```bash
+python .\batch_client_example.py
+```
+
+This example demonstrates how to:
+1. Analyze local audio files 
+2. Analyze audio files from URLs
+3. Mix both local files and URLs in a single request
+
+See `batch_client_example.py` for the full source code.
 
 ### Command-Line Processing
 
@@ -147,3 +345,56 @@ The system now includes an optimization to save API credits:
 The system will only call the ElevenLabs API when:
 1. Processing a new audio file for the first time
 2. Manually requesting transcription for a file that has no speech segments in the database
+
+## Using the Batch API Client Example
+
+The project includes `batch_client_example.py`, a demonstration of how to use the Warden batch API endpoint programmatically. This example shows how to:
+
+1. Process multiple local audio files
+2. Process audio files from URLs
+3. Combine both local files and remote URLs in a single request
+
+### How to Run the Batch Client Example
+
+Run the script using Python:
+
+```bash
+python batch_client_example.py
+```
+
+The script will:
+1. Prompt you to choose between local files, URLs, or both
+2. For local files: process files from the "stereo_test_calls" directory
+3. For URLs: process MP3 files from the provided URLs
+4. Send the combined list to the Warden batch API endpoint
+5. Display detailed metrics for each processed file
+
+### Batch Client Example Output
+
+The script displays comprehensive metrics for each processed file:
+
+- **Basic Info**: File name and path
+- **Latency Metrics**: Average, P50/P90, Min/Max latency
+- **Interruption Detection**: Whether AI or user interrupted each other
+- **Overlap Counts**: Number of AI→User and User→AI overlaps
+- **Other Metrics**: Talk ratio, average pitch, words per minute
+- **Latency Points**: First 5 latency points with timestamp and value
+
+### Adapting the Batch Client Example
+
+You can modify the example script for your specific needs:
+
+1. **Change the server URL**: If you're running the server on a different host or port
+2. **Add more URLs**: Include additional URLs in the `mp3_urls` list
+3. **Process different local files**: Modify the directory path in `base_dir`
+4. **Custom error handling**: Enhance the exception handling for your use case
+5. **Output formatting**: Change how results are displayed or save them to a file
+
+## Integrating with Other Systems
+
+The Warden batch API is designed to be easily integrated with other systems. You can:
+
+1. Use the API from any programming language that can make HTTP requests
+2. Process large collections of audio files in batch mode
+3. Store results in your own database or analytics system
+4. Generate custom reports based on the returned metrics

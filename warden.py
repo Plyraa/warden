@@ -1,5 +1,6 @@
 import argparse
 import os
+import multiprocessing
 
 from audio_metrics import AudioMetricsCalculator
 from web_ui import app as flask_app
@@ -80,6 +81,44 @@ def start_web_interface(host="127.0.0.1", port=5000):
     flask_app.run(host=host, port=port, debug=False)
 
 
+def run_flask_app(host, port):
+    """
+    Function to run the Flask app in a multiprocessing context
+    
+    Args:
+        host: Host address to bind to
+        port: Port to listen on
+    """
+    flask_app.run(host=host, port=port, debug=False)
+
+def start_fastapi_server(host="127.0.0.1", port=8000, start_gui=False):
+    """
+    Start the FastAPI server with optional web UI
+    
+    Args:
+        host: Host address for FastAPI server
+        port: Port for FastAPI server
+        start_gui: Whether to also start the Flask web UI
+    """
+    # Import here to avoid circular imports
+    from fastapi_server import app
+    import uvicorn
+
+    # Start Flask web UI in a separate process if requested
+    if start_gui:
+        print(f"Starting Web UI at http://{host}:5000")
+        flask_process = multiprocessing.Process(
+            target=run_flask_app,
+            args=(host, 5000)
+        )
+        flask_process.daemon = True
+        flask_process.start()
+
+    # Start FastAPI server
+    print(f"Starting FastAPI server at http://{host}:{port}")
+    uvicorn.run(app, host=host, port=port)
+
+
 def main():
     """Main entry point"""
     parser = argparse.ArgumentParser(
@@ -96,29 +135,47 @@ def main():
         help="Directory to save processed audio files",
     )
     parser.add_argument(
-        "--web", action="store_true", help="Start web interface for visualization"
+        "--gui",
+        action="store_true",
+        help="Start web interface for visualization alongside FastAPI",
     )
     parser.add_argument(
-        "--host", default="127.0.0.1", help="Host address for web interface"
+        "--process",
+        action="store_true",
+        help="Process audio files instead of starting servers",
     )
-    parser.add_argument("--port", type=int, default=5000, help="Port for web interface")
+    parser.add_argument(
+        "--web",
+        action="store_true",
+        help="Legacy option: Start only web interface without FastAPI",
+    )
+    parser.add_argument("--host", default="127.0.0.1", help="Host address for servers")
+    parser.add_argument(
+        "--api-port", type=int, default=8000, help="Port for FastAPI server"
+    )
+    parser.add_argument(
+        "--port", type=int, default=5000, help="Port for web interface (legacy)"
+    )
 
     args = parser.parse_args()
 
-    # Process audio files only if --web is not specified
-    if not args.web:
+    # Ensure output directory exists
+    if not os.path.exists(args.output_dir):
+        os.makedirs(args.output_dir)
+        print(f"Created output directory: {os.path.abspath(args.output_dir)}")
+
+    # Choose operation mode
+    if args.process:
+        # Process audio files mode
+        print("Processing audio files")
         process_audio_files(args.input_dir, args.output_dir)
-    else:
-        # Ensure output directory exists for web UI even if not pre-processing
-        if not os.path.exists(args.output_dir):
-            os.makedirs(args.output_dir)
-        print(
-            f"Output directory for web processing: {os.path.abspath(args.output_dir)}"
-        )
-        # Pass input and output dirs to the web app context if needed,
-        # or ensure the web_ui.py uses these defaults or configured paths.
-        # For now, web_ui.py uses its own defaults which match.
+    elif args.web:
+        # Legacy mode: only web UI
+        print("Starting web interface only (legacy mode)")
         start_web_interface(args.host, args.port)
+    else:
+        # Default mode: start FastAPI server with optional GUI
+        start_fastapi_server(args.host, args.api_port, args.gui)
 
 
 if __name__ == "__main__":

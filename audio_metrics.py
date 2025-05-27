@@ -48,77 +48,330 @@ class AudioMetricsCalculator:
 
     def downsample_audio(self, input_file, target_sr=16000):
         """Downsample stereo audio file to target sample rate and return left and right channels, preserving format."""
-        input_path = os.path.join(self.input_dir, input_file)
+        # Check if input_file is an absolute path
+        if os.path.isabs(input_file) and os.path.exists(input_file):
+            input_path = input_file
+            # Extract just the filename for output
+            base_filename = os.path.basename(input_file)
+        else:
+            # Try relative to input directory
+            input_path = os.path.join(self.input_dir, input_file)
+            base_filename = input_file
+
         output_filename = (
-            os.path.splitext(input_file)[0]
+            os.path.splitext(base_filename)[0]
             + "_downsampled"
-            + os.path.splitext(input_file)[1]
+            + os.path.splitext(base_filename)[1]
         )
         output_path = os.path.join(self.output_dir, output_filename)
+
+        # Make sure output directory exists
+        os.makedirs(self.output_dir, exist_ok=True)
+
+        # Verify input file exists and is accessible
+        if not os.path.exists(input_path):
+            print(f"ERROR: Input file does not exist: {input_path}")
+            # Try alternative paths
+            alt_paths = [
+                input_file,  # Try direct path without prepending input_dir
+                os.path.abspath(input_file),  # Try absolute path
+                os.path.join(
+                    os.getcwd(), input_file
+                ),  # Try relative to current working directory
+            ]
+
+            for alt_path in alt_paths:
+                print(f"Trying alternative path: {alt_path}")
+                if os.path.exists(alt_path):
+                    print(f"Found file at alternative path: {alt_path}")
+                    input_path = alt_path
+                    break
+            else:  # No break occurred in the for loop
+                print("All path attempts failed")
+                raise FileNotFoundError(
+                    f"Input file not found: {input_file}. Tried paths: {input_path}, {', '.join(alt_paths)}"
+                )
 
         # Check if downsampled file already exists
         if os.path.exists(output_path):
             print(f"Found existing downsampled file: {output_path}")
-            # Ensure consistent return type with processing case
-            audio, sr = librosa.load(output_path, sr=target_sr, mono=False)
-            # Ensure audio is in the expected shape (channels, samples)
-            if len(audio.shape) == 1:
-                audio = np.array([audio, audio])
-            elif audio.shape[0] != 2 and audio.shape[1] == 2:  # if (samples, channels)
-                audio = audio.T
-            return audio, sr, output_path
-
-        print(f"Downsampling {input_file} to {output_path}")
+            try:
+                # Ensure consistent return type with processing case
+                audio, sr = librosa.load(output_path, sr=target_sr, mono=False)
+                # Ensure audio is in the expected shape (channels, samples)
+                if len(audio.shape) == 1:
+                    audio = np.array([audio, audio])
+                elif (
+                    audio.shape[0] != 2 and audio.shape[1] == 2
+                ):  # if (samples, channels)
+                    audio = audio.T
+                return audio, sr, output_path
+            except Exception as e:
+                print(f"ERROR: Failed to load existing downsampled file: {str(e)}")
+                # Continue with re-downsampling if loading failed
+                print("Will attempt to re-downsample the file...")
+                print(f"Downsampling {input_file} to {output_path}")
         file_extension = os.path.splitext(input_file)[1].lower()
+        try:
+            if file_extension == ".mp3":
+                print(f"Loading MP3 file: {input_path}")
+                print(
+                    f"File exists: {os.path.exists(input_path)}, size: {os.path.getsize(input_path) if os.path.exists(input_path) else 'N/A'} bytes"
+                )
 
-        if file_extension == ".mp3":
-            audio_segment = AudioSegment.from_mp3(input_path)
-            # Ensure stereo
-            if audio_segment.channels == 1:
-                audio_segment = audio_segment.set_channels(2)
+                # Try multiple methods to load the MP3 file
+                try:
+                    # Method 1: Use pydub directly
+                    audio_segment = AudioSegment.from_mp3(input_path)
+                    print(
+                        f"Successfully loaded with pydub: channels={audio_segment.channels}, frame_rate={audio_segment.frame_rate}"
+                    )
+                except Exception as e1:
+                    print(f"Failed to load with pydub: {str(e1)}")
 
-            # Resample if necessary
-            if audio_segment.frame_rate != target_sr:
-                audio_segment = audio_segment.set_frame_rate(target_sr)
+                    try:
+                        # Method 2: Try using librosa directly, then convert to AudioSegment
+                        print("Attempting to load with librosa directly")
+                        temp_audio, temp_sr = librosa.load(
+                            input_path, sr=None, mono=False
+                        )
+                        print(
+                            f"Successfully loaded with librosa: shape={temp_audio.shape}, sr={temp_sr}"
+                        )
 
-            audio_segment.export(output_path, format="mp3")
+                        # Convert librosa array to AudioSegment
+                        # Export to temporary WAV
+                        temp_wav = os.path.join(self.output_dir, "temp_conversion.wav")
+                        if len(temp_audio.shape) == 1:
+                            temp_audio = np.array([temp_audio, temp_audio])
+                        elif temp_audio.shape[0] != 2 and temp_audio.shape[1] == 2:
+                            temp_audio = temp_audio.T
 
-            # For consistency with librosa's output, load the downsampled mp3 with librosa
-            # This is for the return value, the file is already saved.
-            audio, sr = librosa.load(output_path, sr=target_sr, mono=False)
-            # Ensure audio is in the expected shape (channels, samples)
-            if (
-                len(audio.shape) == 1
-            ):  # If mono after librosa load (should not happen with pydub export)
-                audio = np.array([audio, audio])
-            elif audio.shape[0] != 2 and audio.shape[1] == 2:  # if (samples, channels)
-                audio = audio.T
+                        sf.write(temp_wav, temp_audio.T, temp_sr)
 
-        elif file_extension == ".wav":
-            # Load audio
-            audio, sr = librosa.load(input_path, sr=None, mono=False)
+                        # Load the temp WAV with pydub
+                        audio_segment = AudioSegment.from_wav(temp_wav)
+                        print(
+                            f"Created AudioSegment from librosa data: channels={audio_segment.channels}, frame_rate={audio_segment.frame_rate}"
+                        )
 
-            # If audio is mono, duplicate to create stereo
-            if len(audio.shape) == 1:
-                audio = np.array([audio, audio])
-            # Ensure audio is in the shape (channels, samples) before resample
-            elif audio.shape[0] != 2 and audio.shape[1] == 2:  # if (samples, channels)
-                audio = audio.T
+                        # Clean up temp file
+                        if os.path.exists(temp_wav):
+                            os.remove(temp_wav)
+                    except Exception as e2:
+                        print(f"Failed to load with librosa: {str(e2)}")
 
-            # Resample if necessary
-            if sr != target_sr:
-                # librosa.resample expects (channels, samples) or (samples,)
-                # if audio.shape[0] != 2: # If it's (samples, 2)
-                #     audio = audio.T # Transpose to (2, samples)
-                audio = librosa.resample(audio, orig_sr=sr, target_sr=target_sr)
+                        # Method 3: Try using ffmpeg directly
+                        print("Attempting to convert with ffmpeg directly")
+                        import subprocess
 
-            # Save downsampled audio
-            # soundfile.write expects (samples, channels)
-            sf.write(output_path, audio.T, target_sr)
-        else:
-            raise ValueError(f"Unsupported file format: {file_extension}")
+                        try:
+                            # Create output directory if it doesn't exist
+                            os.makedirs(self.output_dir, exist_ok=True)
 
-        return audio, target_sr, output_path
+                            # Use ffmpeg directly to convert
+                            cmd = [
+                                "ffmpeg",
+                                "-y",
+                                "-i",
+                                input_path,
+                                "-ar",
+                                str(target_sr),
+                                "-ac",
+                                "2",  # Force stereo
+                                output_path,
+                            ]
+                            print(f"Running ffmpeg command: {' '.join(cmd)}")
+
+                            result = subprocess.run(
+                                cmd,
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE,
+                                universal_newlines=True,
+                            )
+
+                            if result.returncode != 0:
+                                print(
+                                    f"FFmpeg command failed with return code {result.returncode}"
+                                )
+                                print(f"FFmpeg stderr: {result.stderr}")
+                                raise Exception(
+                                    f"FFmpeg conversion failed: {result.stderr}"
+                                )
+                            else:
+                                print("FFmpeg conversion successful")
+                                # Load the converted file with librosa for return
+                                audio, sr = librosa.load(
+                                    output_path, sr=target_sr, mono=False
+                                )
+                                if len(audio.shape) == 1:
+                                    audio = np.array([audio, audio])
+                                elif audio.shape[0] != 2 and audio.shape[1] == 2:
+                                    audio = audio.T
+
+                                # Return early since we've already saved the output file
+                                return audio, sr, output_path
+                        except Exception as e3:
+                            print(f"Failed to convert with ffmpeg: {str(e3)}")
+                            raise Exception(
+                                f"All methods failed to process audio file: {input_path}. Error 1: {str(e1)}. Error 2: {str(e2)}. Error 3: {str(e3)}"
+                            )
+
+                # If we got here, one of the methods worked and we have an audio_segment
+                # Continue with normal processing
+
+                # Ensure stereo
+                if audio_segment.channels == 1:
+                    print("Converting mono to stereo")
+                    audio_segment = audio_segment.set_channels(2)
+
+                # Resample if necessary
+                if audio_segment.frame_rate != target_sr:
+                    print(
+                        f"Resampling from {audio_segment.frame_rate}Hz to {target_sr}Hz"
+                    )
+                    audio_segment = audio_segment.set_frame_rate(target_sr)
+
+                print(f"Exporting to: {output_path}")
+                audio_segment.export(output_path, format="mp3")
+                print("Export completed successfully")
+
+                # For consistency with librosa's output, load the downsampled mp3 with librosa
+                # This is for the return value, the file is already saved.
+                print("Loading downsampled file with librosa for return value")
+                audio, sr = librosa.load(output_path, sr=target_sr, mono=False)
+                print(f"Loaded audio shape: {audio.shape}, sr={sr}")
+
+                # Ensure audio is in the expected shape (channels, samples)
+                if len(audio.shape) == 1:  # If mono after librosa load
+                    print("Converting mono to stereo array")
+                    audio = np.array([audio, audio])
+                elif (
+                    audio.shape[0] != 2 and audio.shape[1] == 2
+                ):  # if (samples, channels)
+                    print("Transposing audio to get channels first")
+                    audio = audio.T
+
+                print(f"Final audio shape: {audio.shape}")
+            elif file_extension == ".wav":
+                print(f"Loading WAV file: {input_path}")
+                print(
+                    f"File exists: {os.path.exists(input_path)}, size: {os.path.getsize(input_path) if os.path.exists(input_path) else 'N/A'} bytes"
+                )
+
+                try:
+                    # Try method 1: Use librosa
+                    audio, sr = librosa.load(input_path, sr=None, mono=False)
+                    print(
+                        f"Successfully loaded with librosa: shape={audio.shape}, sr={sr}"
+                    )
+                except Exception as e1:
+                    print(f"Failed to load with librosa: {str(e1)}")
+
+                    try:
+                        # Method 2: Try using soundfile
+                        print("Attempting to load with soundfile")
+                        audio, sr = sf.read(input_path)
+                        # soundfile returns (samples, channels)
+                        if len(audio.shape) > 1 and audio.shape[1] == 2:
+                            audio = audio.T  # Convert to (channels, samples)
+                        else:
+                            audio = np.array([audio, audio])  # Convert mono to stereo
+                        print(
+                            f"Successfully loaded with soundfile: shape={audio.shape}, sr={sr}"
+                        )
+                    except Exception as e2:
+                        print(f"Failed to load with soundfile: {str(e2)}")
+
+                        # Method 3: Try using ffmpeg directly
+                        print("Attempting to convert with ffmpeg directly")
+                        import subprocess
+
+                        try:
+                            # Create output directory if it doesn't exist
+                            os.makedirs(self.output_dir, exist_ok=True)
+
+                            # Use ffmpeg directly to convert
+                            cmd = [
+                                "ffmpeg",
+                                "-y",
+                                "-i",
+                                input_path,
+                                "-ar",
+                                str(target_sr),
+                                "-ac",
+                                "2",  # Force stereo
+                                output_path,
+                            ]
+                            print(f"Running ffmpeg command: {' '.join(cmd)}")
+
+                            result = subprocess.run(
+                                cmd,
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE,
+                                universal_newlines=True,
+                            )
+
+                            if result.returncode != 0:
+                                print(
+                                    f"FFmpeg command failed with return code {result.returncode}"
+                                )
+                                print(f"FFmpeg stderr: {result.stderr}")
+                                raise Exception(
+                                    f"FFmpeg conversion failed: {result.stderr}"
+                                )
+                            else:
+                                print("FFmpeg conversion successful")
+                                # Load the converted file with librosa for return
+                                audio, sr = librosa.load(
+                                    output_path, sr=target_sr, mono=False
+                                )
+                                if len(audio.shape) == 1:
+                                    audio = np.array([audio, audio])
+                                elif audio.shape[0] != 2 and audio.shape[1] == 2:
+                                    audio = audio.T
+
+                                # Return early since we've already saved the output file
+                                return audio, sr, output_path
+                        except Exception as e3:
+                            print(f"Failed to convert with ffmpeg: {str(e3)}")
+                            raise Exception(
+                                f"All methods failed to process audio file: {input_path}. Error 1: {str(e1)}. Error 2: {str(e2)}. Error 3: {str(e3)}"
+                            )
+
+                # If we got here, one of the methods worked and we have audio data
+
+                # If audio is mono, duplicate to create stereo
+                if len(audio.shape) == 1:
+                    print("Converting mono to stereo array")
+                    audio = np.array([audio, audio])
+                # Ensure audio is in the shape (channels, samples) before resample
+                elif (
+                    audio.shape[0] != 2 and audio.shape[1] == 2
+                ):  # if (samples, channels)
+                    print("Transposing audio to get channels first")
+                    audio = audio.T
+
+                # Resample if necessary
+                if sr != target_sr:
+                    print(f"Resampling from {sr}Hz to {target_sr}Hz")
+                    audio = librosa.resample(audio, orig_sr=sr, target_sr=target_sr)
+
+                # Save downsampled audio
+                print(f"Saving to: {output_path}")
+                # soundfile.write expects (samples, channels)
+                sf.write(output_path, audio.T, target_sr)
+                print("File saved successfully")
+            else:
+                raise ValueError(f"Unsupported file format: {file_extension}")
+
+            print("Downsampling completed successfully")
+            return audio, target_sr, output_path
+
+        except Exception as e:
+            print(f"ERROR in downsampling: {str(e)}")
+            print(f"Stack trace: {traceback.format_exc()}")
+            raise
 
     def _get_transcript_for_file(
         self,
@@ -411,7 +664,7 @@ class AudioMetricsCalculator:
         """
         # Print raw Silero VAD timestamps for debugging
         print(
-            f"Raw Silero VAD timestamps: {speech_timestamps}"
+            f"Silero VAD raw timestamps for {audio_channel}: {speech_timestamps}"
         )  # Return dictionary format directly to avoid conversion issues
         # No need for any conversions as return_seconds=True already gives us float values
 
@@ -1158,20 +1411,27 @@ class AudioMetricsCalculator:
     def process_file(self, filename):
         """Process a single audio file and calculate all metrics.
         Checks database first, if found, returns stored metrics.
-        Otherwise, processes and stores new metrics."""
+        Otherwise, processes and stores new metrics.
+
+        Args:
+            filename: Can be either a filename relative to the input_dir or an absolute path
+        """
+        # Normalize the filename for database lookup
+        base_filename = os.path.basename(filename)
 
         db_session = next(get_db())  # Get a database session
         try:
-            existing_analysis_db = get_analysis_by_filename(db_session, filename)
+            existing_analysis_db = get_analysis_by_filename(db_session, base_filename)
             if existing_analysis_db:
                 print(
-                    f"Found existing analysis for {filename} in database. Returning stored data."
+                    f"Found existing analysis for {base_filename} in database. Returning stored data."
                 )
                 metrics = recreate_metrics_from_db(existing_analysis_db)
                 # Ensure downsampled path is available, even if loading from DB
                 _audio, _sr, _output_path = self.downsample_audio(
                     filename
-                )  # audio and sr not used here                metrics["downsampled_path"] = _output_path  # Store the path
+                )  # audio and sr not used here
+                metrics["downsampled_path"] = _output_path  # Store the path
 
                 # Only try to get transcript if ElevenLabs client is available and transcript is missing
                 if not metrics.get("transcript_data") and self.elevenlabs_client:
@@ -1206,8 +1466,9 @@ class AudioMetricsCalculator:
                             f"Failed to generate transcript for {filename}. No transcript data available."
                         )
                 return metrics
-
-            print(f"No existing analysis for {filename} in database. Processing anew.")
+            print(
+                f"No existing analysis for {base_filename} in database. Processing anew."
+            )
             # Downsample audio file (this also handles existing downsampled files)
             audio, sr, output_path = self.downsample_audio(
                 filename
@@ -1217,13 +1478,17 @@ class AudioMetricsCalculator:
 
             # Process agent channel with Silero VAD
             print("Processing agent channel with Silero VAD...")
-            raw_agent_vad_segments = self.detect_speech_silero_vad(audio[1], sr)
-
-            # Get transcript with improved overlap handling (if ElevenLabs client is available)
+            raw_agent_vad_segments = self.detect_speech_silero_vad(
+                audio[1], sr
+            )  # Get transcript with improved overlap handling (if ElevenLabs client is available)
             # Now we pass the VAD segments for accurate speaker correlation
             transcript_data = None
             if self.elevenlabs_client:
-                original_file_path = os.path.join(self.input_dir, filename)
+                # Check if filename is already an absolute path
+                if os.path.isabs(filename) and os.path.exists(filename):
+                    original_file_path = filename
+                else:
+                    original_file_path = os.path.join(self.input_dir, filename)
                 print(f"Attempting transcription for {original_file_path}...")
                 transcript_data = self._get_transcript_for_file(
                     original_file_path, raw_user_vad_segments, raw_agent_vad_segments
@@ -1273,7 +1538,8 @@ class AudioMetricsCalculator:
 
             # Calculate metrics
             metrics = {
-                "filename": filename,
+                "filename": base_filename,  # Use base filename for consistent database lookups
+                "original_path": filename,  # Store original path for reference
                 "downsampled_path": output_path,
                 "combined_speaker_turns": combined_speaker_turns,  # Store the combined turns
                 # Use merged turns for all relevant metrics
@@ -1298,12 +1564,10 @@ class AudioMetricsCalculator:
                 ),
                 "transcript_data": transcript_data,
             }  # No placeholder transcript generation - user requested removal
-            # The "no transcript data available" message will be shown when transcript fails
-
-            # Add new analysis to database
+            # The "no transcript data available" message will be shown when transcript fails            # Add new analysis to database
             add_analysis(db_session, metrics)
             print(
-                f"Saved new analysis for {filename} to database with improved transcript handling."
+                f"Saved new analysis for {base_filename} to database with improved transcript handling."
             )
             return metrics
         finally:

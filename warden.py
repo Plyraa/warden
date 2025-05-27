@@ -77,7 +77,7 @@ def print_metrics_summary(metrics):
 def start_web_interface(host="127.0.0.1", port=5000, threads=4):
     """
     Start the web UI using Waitress WSGI server.
-    
+
     Args:
         host: Host address to bind to
         port: Port to listen on
@@ -86,16 +86,18 @@ def start_web_interface(host="127.0.0.1", port=5000, threads=4):
     try:
         # Use the consolidated server module
         from server import run_flask_app
+
         run_flask_app(host, port, threads)
     except Exception as e:
         # Log any errors that might occur during startup
         print(f"Error starting web interface: {str(e)}")
         print("Please ensure Waitress is installed: pip install waitress")
 
+
 def start_fastapi_server(host="127.0.0.1", port=8000, start_gui=False, threads=4):
     """
     Start the FastAPI server with optional web UI
-    
+
     Args:
         host: Host address for FastAPI server
         port: Port for FastAPI server
@@ -107,10 +109,12 @@ def start_fastapi_server(host="127.0.0.1", port=8000, start_gui=False, threads=4
         if start_gui:
             # Run both FastAPI and Flask UI
             from server import run_combined
+
             run_combined(host, port, 5000, threads)
         else:
             # Run only FastAPI
             from server import run_fastapi_app
+
             run_fastapi_app(host, port)
     except Exception as e:
         print(f"Error starting server: {str(e)}")
@@ -140,7 +144,8 @@ def main():
     parser.add_argument(
         "--process",
         action="store_true",
-        help="Process audio files instead of starting servers",    )
+        help="Process audio files instead of starting servers",
+    )
     parser.add_argument(
         "--web",
         action="store_true",
@@ -162,7 +167,9 @@ def main():
     # Ensure output directory exists
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
-        print(f"Created output directory: {os.path.abspath(args.output_dir)}")    # Choose operation mode
+        print(
+            f"Created output directory: {os.path.abspath(args.output_dir)}"
+        )  # Choose operation mode
     if args.process:
         # Process audio files mode
         print("Processing audio files")
@@ -171,7 +178,7 @@ def main():
         # Legacy mode: only web UI
         print("Starting web interface only (legacy mode)")
         start_web_interface(args.host, args.port, args.workers)
-    else:        # Default mode: start FastAPI server with optional GUI
+    else:  # Default mode: start FastAPI server with optional GUI
         start_fastapi_server(args.host, args.api_port, args.gui, args.workers)
 
 

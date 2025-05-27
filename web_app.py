@@ -2,6 +2,7 @@
 Web application for Warden audio analysis visualization.
 This module provides the web interface served by Waitress WSGI server.
 """
+
 import os
 
 # Import Flask
@@ -110,8 +111,16 @@ def analyze_audio():
                     if closest_start is not None:
                         latency_info = ai_messages_start_times[closest_start]
                         # Only add latency info to the first word of each agent message
-                        if abs(word["start"] - closest_start) < 0.5:  # Within 0.5 seconds
-                            word["latency"] = latency_info["latency"]
+                        if (
+                            abs(word["start"] - closest_start) < 0.5
+                        ):  # Within 0.5 seconds
+                            # Use latency_seconds or latency_ms depending on what's available
+                            if "latency_seconds" in latency_info:
+                                word["latency"] = latency_info["latency_seconds"]
+                            elif "latency_ms" in latency_info:
+                                word["latency"] = (
+                                    latency_info["latency_ms"] / 1000.0
+                                )  # Convert to seconds
                             word["from_turn_end"] = latency_info["from_turn_end"]
                             word["to_turn_start"] = latency_info["to_turn_start"]
 

@@ -1,5 +1,6 @@
 import os
 import time
+import traceback
 from typing import List, Dict, Any
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -24,7 +25,7 @@ class MetricsResponse(BaseModel):
     """Model for the metrics response"""
 
     file_path: str  # Keep for backward compatibility
-    filename: str   # Use filename instead of file_name
+    filename: str  # Use filename instead of file_name
     latency_points: List[Dict[str, Any]]
     average_latency: float
     p50_latency: float
@@ -70,60 +71,8 @@ app.add_middleware(
 calculator = AudioMetricsCalculator()
 
 
-# Add a URL download function
-def is_url(path):
-    """Check if a string is a URL"""
-    try:
-        result = urlparse(path)
-        return all([result.scheme, result.netloc])
-    except Exception:
-        return False
-
-
-def download_mp3_from_url(url):
-    """
-    Download an MP3 file from a URL and save it to a temporary directory
-
-    Args:
-        url: URL of the MP3 file
-
-    Returns:
-        Path to the downloaded file or None if download failed
-    """
-    try:
-        # Parse the URL to get the filename
-        parsed_url = urlparse(url)
-        filename = os.path.basename(parsed_url.path)
-
-        # If filename is empty or doesn't end with .mp3, create a unique name
-        if not filename or not filename.lower().endswith(".mp3"):
-            filename = f"downloaded_{int(time.time())}.mp3"
-
-        # Create downloads directory if it doesn't exist
-        download_dir = os.path.join(os.getcwd(), "stereo_test_calls")
-        os.makedirs(download_dir, exist_ok=True)
-
-        # Create the save path
-        save_path = os.path.join(download_dir, filename)
-
-        # Download the file
-        print(f"Downloading {url} to {save_path}")
-        response = requests.get(url, stream=True)
-        response.raise_for_status()  # Raise an exception for HTTP errors
-
-        # Save the file
-        with open(save_path, "wb") as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                f.write(chunk)
-
-        print(f"Successfully downloaded file to {save_path}")
-        return save_path
-
-    except Exception as e:
-        print(f"Error downloading file from {url}: {str(e)}")
-        raise HTTPException(
-            status_code=500, detail=f"Error downloading file from {url}: {str(e)}"
-        )
+# Import the enhanced URL helpers
+from url_helper import is_url, download_audio_from_url
 
 
 @app.get("/")
@@ -144,93 +93,145 @@ def analyze_batch(audio_files: AudioFileList):
     """
     results = []
 
+    print(f"Received batch request for {len(audio_files.file_paths)} files")
+
     for path in audio_files.file_paths:
         # Check if it's a URL or local file
         local_file_path = path
-
-        # If it's a URL, download the file first
+        print(f"Processing: {path}")  # If it's a URL, download the file first
         if is_url(path):
             try:
-                local_file_path = download_mp3_from_url(path)
+                local_file_path = download_audio_from_url(path)
+                print(f"Downloaded to: {local_file_path}")
             except Exception as e:
+                error_msg = f"Failed to download file from URL: {str(e)}"
+                print(f"ERROR: {error_msg}")
                 raise HTTPException(
                     status_code=500,
-                    detail=f"Failed to download file from URL: {str(e)}",
+                    detail=error_msg,
                 )
         # Otherwise check if the local file exists
-        elif not os.path.exists(path):
-            raise HTTPException(status_code=404, detail=f"File not found: {path}")
+        elif not os.path.exists(
+            os.path.join(calculator.input_dir, path)
+        ) and not os.path.exists(path):
+            error_msg = f"File not found: {path} (neither as absolute path nor in {calculator.input_dir})"
+            print(f"ERROR: {error_msg}")
+            raise HTTPException(status_code=404, detail=error_msg)
+        else:
+            if os.path.exists(path):
+                print(f"Found file as absolute path: {path}")
+            else:
+                print(
+                    f"Found file in input directory: {os.path.join(calculator.input_dir, path)}"
+                )
 
         # Get filename from path
         filename = os.path.basename(local_file_path)
-
+        print(f"Using filename: {filename}")
         try:
             # Process the file
+            print(f"Calling process_file with filename: {filename}")
             metrics = calculator.process_file(filename)
+            print(f"process_file successful, received metrics")
 
             # Extract the latency points
             latency_points = []
             if metrics.get("vad_latency_details"):
+                print(f"Found {len(metrics['vad_latency_details'])} latency details")
                 for point in metrics["vad_latency_details"]:
                     if point["interaction_type"] == "user_to_agent":
+                        latency_ms = point.get("latency_ms", 0)
+                        # If latency_ms isn't available, try to get latency_seconds and convert
+                        if latency_ms == 0 and "latency_seconds" in point:
+                            latency_ms = point["latency_seconds"] * 1000
+
                         latency_points.append(
                             {
-                                "latency_ms": point["latency_ms"],
+                                "latency_ms": latency_ms,
                                 "moment": point["to_turn_start"],
                             }
-                        )
-
-            # Extract the required metrics
+                        )  # Extract the required metrics
+            print("Extracting metrics for response")
             latency_metrics = metrics.get("vad_latency_metrics", {})
-            overlap_data = metrics.get("overlap_data", {})            # Count the overlaps by type
+            print(
+                f"VAD latency metrics: {list(latency_metrics.keys()) if latency_metrics else 'None'}"
+            )
+
+            overlap_data = metrics.get("overlap_data", {})
+            print(
+                f"Overlap data keys: {list(overlap_data.keys()) if overlap_data else 'None'}"
+            )
+
+            # Count the overlaps by type
             ai_user_overlap_count = 0
             user_ai_overlap_count = 0
-            
+
             overlaps = overlap_data.get("overlaps", [])
+            print(f"Found {len(overlaps)} overlaps")
+
             for overlap in overlaps:
                 if overlap.get("interrupter") == "ai_agent":
                     ai_user_overlap_count += 1
                 elif overlap.get("interrupter") == "user":
                     user_ai_overlap_count += 1
-            
-            result = MetricsResponse(
-                file_path=path,  # Use the original path/URL that was passed in
-                filename=filename,  # Include the filename for consistency
-                latency_points=latency_points,
-                average_latency=latency_metrics.get("avg_latency", 0)
-                * 1000,  # Convert to ms
-                p50_latency=latency_metrics.get("p50_latency", 0)
-                * 1000,  # Convert to ms
-                p90_latency=latency_metrics.get("p90_latency", 0)
-                * 1000,  # Convert to ms
-                min_latency=latency_metrics.get("min_latency", 0)
-                * 1000,  # Convert to ms
-                max_latency=latency_metrics.get("max_latency", 0)
-                * 1000,  # Convert to ms
-                ai_interrupting_user=metrics.get("ai_interrupting_user", False),
-                user_interrupting_ai=metrics.get("user_interrupting_ai", False),
-                ai_user_overlap_count=ai_user_overlap_count,  # AI interrupting user count
-                user_ai_overlap_count=user_ai_overlap_count,  # User interrupting AI count
-                talk_ratio=metrics.get("talk_ratio", 0),
-                average_pitch=metrics.get("average_pitch", 0),
-                words_per_minute=metrics.get("words_per_minute", 0),
+
+            print(
+                f"Counted {ai_user_overlap_count} AI interruptions and {user_ai_overlap_count} user interruptions"
             )
+            print("Creating MetricsResponse object")
+            try:
+                # Prepare values with appropriate error handling
+                avg_latency = latency_metrics.get("avg_latency", 0)
+                p50_latency = latency_metrics.get("p50_latency", 0)
+                p90_latency = latency_metrics.get("p90_latency", 0)
+                min_latency = latency_metrics.get("min_latency", 0)
+                max_latency = latency_metrics.get("max_latency", 0)
+
+                print(
+                    f"Latency values (seconds): avg={avg_latency}, p50={p50_latency}, p90={p90_latency}"
+                )
+
+                result = MetricsResponse(
+                    file_path=path,  # Use the original path/URL that was passed in
+                    filename=filename,  # Include the filename for consistency
+                    latency_points=latency_points,
+                    average_latency=avg_latency * 1000,  # Convert to ms
+                    p50_latency=p50_latency * 1000,  # Convert to ms
+                    p90_latency=p90_latency * 1000,  # Convert to ms
+                    min_latency=min_latency * 1000,  # Convert to ms
+                    max_latency=max_latency * 1000,  # Convert to ms
+                    ai_interrupting_user=metrics.get("ai_interrupting_user", False),
+                    user_interrupting_ai=metrics.get("user_interrupting_ai", False),
+                    ai_user_overlap_count=ai_user_overlap_count,  # AI interrupting user count
+                    user_ai_overlap_count=user_ai_overlap_count,  # User interrupting AI count
+                    talk_ratio=metrics.get("talk_ratio", 0),
+                    average_pitch=metrics.get("average_pitch", 0),
+                    words_per_minute=metrics.get("words_per_minute", 0),
+                )
+                print("MetricsResponse object created successfully")
+            except Exception as e:
+                print(f"ERROR creating MetricsResponse: {str(e)}")
+                print(f"Stack trace: {traceback.format_exc()}")
+                raise
 
             results.append(result)
-
         except Exception as e:
+            error_msg = f"Error processing file {local_file_path}: {str(e)}"
+            print(f"ERROR: {error_msg}")
+            print(f"Stack trace: {traceback.format_exc()}")
             raise HTTPException(
                 status_code=500,
-                detail=f"Error processing file {local_file_path}: {str(e)}",
+                detail=error_msg,
             )
 
+    print(f"Batch processing complete, returning {len(results)} results")
     return results
 
 
 def start_web_app(host="127.0.0.1", port=5000, threads=4):
     """Start web app with Waitress WSGI server"""
     from server import run_flask_app
-    
+
     # Run the web application with Waitress
     run_flask_app(host, port, threads)
 

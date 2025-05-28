@@ -205,11 +205,7 @@ Warden offers multiple ways to run the application:
    python warden.py --web-only --threads 8
    ```
 
-4. **Audio Processing Mode**:
-   ```bash
-   python warden.py --process
-   ```
-   This processes audio files from the command line without starting any servers.
+
 
 #### API Endpoints
 
@@ -255,29 +251,8 @@ This example demonstrates how to:
 
 See `batch_client_example.py` for the full source code.
 
-### Command-Line Processing
-
-To process audio files directly from the command line:
-
-```bash
-python warden.py --process --input-dir <your_input_directory> --output-dir <your_output_directory>
-```
-
-Replace `<your_input_directory>` with the path to the directory containing your audio files (e.g., `stereo_test_calls`) and `<your_output_directory>` with the path where processed files should be saved (e.g., `sampled_test_calls`).
-
-If you omit `--input-dir` and `--output-dir`, it will default to `stereo_test_calls` and `sampled_test_calls` respectively.
-
-For example:
-
-```bash
-python warden.py --process
-```
-
-This will process files from `stereo_test_calls` and save results to `sampled_test_calls`.
-
 ### Available Command-Line Arguments
 
-*   `--process`: Process audio files instead of starting servers.
 *   `--input-dir`: Directory containing input audio files (default: `stereo_test_calls`).
 *   `--output-dir`: Directory to save processed audio files (default: `sampled_test_calls`).
 *   `--web-only`: Start only the Flask web UI.
@@ -333,8 +308,7 @@ The server architecture has been consolidated into a single entry point. The new
 The `warden.py` module is the central component that can:
 1. Run either server independently
 2. Run both servers simultaneously (with web UI in a separate process)
-3. Process audio files from command line
-4. Handle command-line arguments for flexible configuration
+3. Handle command-line arguments for flexible configuration
 
 ```
 ┌─────────────────────────────────────────┐

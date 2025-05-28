@@ -87,6 +87,7 @@ def run_flask_app(host="127.0.0.1", port=5000, threads=4):
     """
     # Import applications
     from wsgi import application as flask_app
+
     serve(flask_app, host=host, port=port, threads=threads)
 
 
@@ -100,6 +101,7 @@ def run_fastapi_app(host="127.0.0.1", port=8000):
     """
     # Import here to avoid circular imports
     from fastapi_server import app as fastapi_app
+
     uvicorn.run(fastapi_app, host=host, port=port)
 
 
@@ -122,7 +124,7 @@ def run_combined(host="127.0.0.1", api_port=8000, web_port=5000, threads=4):
 
     print(f"Started Web UI at http://{host}:{web_port}")
     print(f"Starting FastAPI server at http://{host}:{api_port}")
-    
+
     # Run FastAPI in the main process
     run_fastapi_app(host, api_port)
 

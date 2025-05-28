@@ -20,9 +20,20 @@
             box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
             border-radius: 5px;
         }
-        
-        h1, h2, h3 {
+          h1, h2, h3 {
             color: #333;
+        }
+          .header-container {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 20px;
+        }
+        
+        .mascot-image {
+            width: 100px;
+            height: 100px;
+            object-fit: contain;
         }
         
         .file-selector {
@@ -196,9 +207,12 @@
         }
     </style>
 </head>
-<body>
-    <div class="container">
-        <h1>Warden</h1>          <div class="file-selector">
+<body>    <div class="container">
+        <div class="header-container">
+            <h1>Warden</h1>
+            <img src="/static/podo_square.png" alt="Podo Mascot" class="mascot-image">
+        </div>
+        <div class="file-selector">
             <h3>Select Audio File <span id="refreshAudioFiles" style="font-size: 0.8em; padding: 3px 8px; cursor: pointer; color: #0066cc;">↻</span></h3>
             <div id="refreshStatus" style="font-size: 0.8em; color: #666; margin-bottom: 5px;"></div>
             <form id="audioForm">

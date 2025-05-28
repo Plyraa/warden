@@ -51,8 +51,8 @@ def test_improved_latency_calculation():
         user_segments, agent_segments
     )
 
-    print(f"\n=== Results ===")
-    print(f"Latency Statistics:")
+    print("\n=== Results ===")
+    print("Latency Statistics:")
     for key, value in latency_stats.items():
         if isinstance(value, float):
             print(f"  {key}: {value:.3f}s")
@@ -105,8 +105,8 @@ def test_overlap_scenario():
         user_segments, agent_segments
     )
 
-    print(f"\nOverlap Test Results:")
-    print(f"Latency Statistics:")
+    print("\nOverlap Test Results:")
+    print("Latency Statistics:")
     for key, value in latency_stats.items():
         if isinstance(value, float):
             print(f"  {key}: {value:.3f}s")

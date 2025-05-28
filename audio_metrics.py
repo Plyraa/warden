@@ -1402,18 +1402,17 @@ class AudioMetricsCalculator:
                 if overlap_start < overlap_end:
                     segment_overlap += overlap_end - overlap_start
 
-            total_overlap += segment_overlap
-
-        # Return overlap ratio
+            total_overlap += segment_overlap  # Return overlap ratio
         return total_overlap / total_duration_a if total_duration_a > 0 else 0.0
 
-    def process_file(self, filename):
+    def process_file(self, filename, source_url=None):
         """Process a single audio file and calculate all metrics.
         Checks database first, if found, returns stored metrics.
         Otherwise, processes and stores new metrics.
 
         Args:
             filename: Can be either a filename relative to the input_dir or an absolute path
+            source_url: Optional URL source if file was downloaded from web
         """
         # Normalize the filename for database lookup
         base_filename = os.path.basename(filename)
@@ -1533,11 +1532,10 @@ class AudioMetricsCalculator:
             # Calculate overlap detection using raw VAD segments for higher granularity
             overlap_data = self.detect_overlaps_from_vad_segments(
                 raw_user_vad_segments, raw_agent_vad_segments
-            )
-
-            # Calculate metrics
+            )  # Calculate metrics
             metrics = {
                 "filename": base_filename,  # Use base filename for consistent database lookups
+                "source_url": source_url,  # Store source URL if downloaded from web
                 "original_path": filename,  # Store original path for reference
                 "downsampled_path": output_path,
                 "combined_speaker_turns": combined_speaker_turns,  # Store the combined turns

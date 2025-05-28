@@ -15,7 +15,7 @@ import json
 import os
 import requests
 
-
+# Invoke-RestMethod -Uri "http://127.0.0.1:8000/batch" -Method POST -Body '{"file_paths": ["https://github.com/Plyraa/warden/raw/refs/heads/main/stereo_test_calls/66057328368247d623d0b87.67876133.mp3"]}' -ContentType "application/json" | ConvertTo-Json -Depth 10
 # =============================================================================
 # UTILITY FUNCTIONS
 # =============================================================================
@@ -228,7 +228,7 @@ def test_file_validation(base_url="http://127.0.0.1:8000"):
     test_files = [
         "stereo_test_calls/test1.mp3",  # Should exist
         "nonexistent_file.mp3",  # Should not exist
-        "https://github.com/Plyraa/warden/raw/refs/heads/main/stereo_test_calls/test1.mp3",  # URL
+        # "https://github.com/Plyraa/warden/raw/refs/heads/main/stereo_test_calls/test1.mp3",  # URL
         "https://invalid-domain-12345.com/fake.mp3",  # Invalid URL
     ]
 
@@ -270,10 +270,8 @@ def test_batch_processing_with_errors(base_url="http://127.0.0.1:8000"):
         response = requests.post(f"{base_url}/batch", json={"file_paths": batch_files})
         if response.status_code == 200:
             print("✓ Batch processing completed")
-            batch_data = response.json()
-
-            # Count successes and errors from results
-            results = batch_data["results"]
+            batch_data = response.json()  # Count successes and errors from results
+            results = batch_data
             success_count = len([r for r in results if r.get("status") == "success"])
             error_count = len([r for r in results if r.get("status") != "success"])
 
@@ -356,6 +354,7 @@ def test_full_batch_workflow():
         file_paths = [
             "https://github.com/Plyraa/warden/raw/refs/heads/main/stereo_test_calls/243801406824559add7684.37683750.mp3",
             "https://github.com/Plyraa/warden/raw/refs/heads/main/stereo_test_calls/16952962156823ffe2a06954.22932860.mp3",
+            "https://github.com/Plyraa/warden/raw/refs/heads/main/stereo_test_calls/test1.mp3",
         ]
         print(f"\nUsing {len(file_paths)} URL references:")
         for url in file_paths:
@@ -423,7 +422,7 @@ def test_full_batch_workflow():
         print("\n--- BATCH RESULTS ---")
 
         # Count successes and errors
-        results = response["results"]
+        results = response
         success_count = len([r for r in results if r.get("status") == "success"])
         error_count = len([r for r in results if r.get("status") != "success"])
 
@@ -506,7 +505,7 @@ def test_full_batch_workflow():
 
         test_response = analyze_files(test_files, base_url)
         if test_response:
-            test_results = test_response["results"]
+            test_results = test_response
             test_success = len(
                 [r for r in test_results if r.get("status") == "success"]
             )

@@ -32,6 +32,9 @@ class AudioAnalysis(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     original_filename = Column(String, unique=True, index=True, nullable=False)
+    source_url = Column(
+        String, nullable=True, index=True
+    )  # URL source if downloaded from web
     downsampled_filepath = Column(String, nullable=False)
     analysis_timestamp = Column(DateTime(timezone=True), server_default=func.now())
 
@@ -135,6 +138,7 @@ def add_analysis(db_session, metrics_data):
 
     db_analysis = AudioAnalysis(
         original_filename=metrics_data["filename"],
+        source_url=metrics_data.get("source_url"),  # Add source URL support
         downsampled_filepath=metrics_data["downsampled_path"],
         analysis_timestamp=datetime.datetime.now(datetime.timezone.utc),
         # Legacy latency metrics
@@ -195,6 +199,15 @@ def get_analysis_by_filename(db_session, filename: str):
     return (
         db_session.query(AudioAnalysis)
         .filter(AudioAnalysis.original_filename == filename)
+        .first()
+    )
+
+
+def get_analysis_by_url(db_session, source_url: str):
+    """Lookup existing analysis by source URL"""
+    return (
+        db_session.query(AudioAnalysis)
+        .filter(AudioAnalysis.source_url == source_url)
         .first()
     )
 

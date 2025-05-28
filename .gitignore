@@ -1,6 +1,7 @@
 .vscode/
 __pycache__/
 sampled_test_calls/
+stereo_test_calls/
 .env
 database/audio_analysis.db
 UPDATE_INSTRUCTIONS.md

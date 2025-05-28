@@ -947,11 +947,11 @@ class AudioMetricsCalculator:
             "avg_latency": sum(latencies) / len(latencies),
             "min_latency": min(latencies),
             "max_latency": max(latencies),
-            "p10_latency": np.percentile(latencies, 10)
+            "p10_latency": float(np.percentile(latencies, 10))
             if len(latencies) >= 10
             else min(latencies),
-            "p50_latency": np.percentile(latencies, 50),
-            "p90_latency": np.percentile(latencies, 90)
+            "p50_latency": float(np.percentile(latencies, 50)),
+            "p90_latency": float(np.percentile(latencies, 90))
             if len(latencies) >= 10
             else max(latencies),
         }
@@ -1021,12 +1021,11 @@ class AudioMetricsCalculator:
         # TODO: Normally I aim to find points when AI agent's voice gone wild, but
         # this could be an extreme value that gets filtered by next line. I need
         # some broken audio to test this.
-
         # Filter out extreme values (noise)
         valid_pitches = pitches_flat[(pitches_flat > 50) & (pitches_flat < 500)]
 
         if len(valid_pitches) > 0:
-            return np.mean(valid_pitches)
+            return float(np.mean(valid_pitches))
         else:
             return 0
 

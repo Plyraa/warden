@@ -1,6 +1,5 @@
 elevenlabs==2.1.0
 fastapi==0.115.12
-waitress==3.0.0  # WSGI server compatible with all platforms
 Flask==3.1.1
 librosa==0.11.0
 matplotlib==3.10.3
@@ -8,9 +7,11 @@ numpy==2.2.6
 pydantic==2.11.5
 pydub==0.25.1
 python-dotenv==1.1.0
+Requests==2.32.3
 scipy==1.15.3
 soundfile==0.13.1
 SQLAlchemy==2.0.41
 torch==2.7.0
-torchaudio==2.7.0
+urllib3==2.4.0
 uvicorn==0.34.2
+waitress==3.0.2

@@ -5,7 +5,6 @@ More robust implementation with retry logic, validation and error handling
 
 import os
 import time
-import traceback
 import re
 import requests
 import subprocess
@@ -14,10 +13,8 @@ import logging
 import mimetypes
 from urllib.parse import urlparse, parse_qs, unquote
 from pathlib import Path
-from typing import Optional, Tuple
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from fastapi import HTTPException
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -326,7 +323,6 @@ class AudioDownloader:
 
             # Download with progress tracking
             content_type = response.headers.get("Content-Type", "")
-            content_length = response.headers.get("Content-Length")
 
             logger.info(f"Downloading to: {save_path}")
             print(f"Downloading to: {save_path}")

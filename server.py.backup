@@ -3,8 +3,6 @@ Server module for Warden application.
 Provides functionality to run both Flask and FastAPI applications using Waitress and Uvicorn.
 """
 
-import os
-import sys
 import multiprocessing
 from waitress import serve
 import uvicorn
@@ -93,7 +91,7 @@ if __name__ == "__main__":
         run_fastapi_app(args.host, args.api_port)
     else:
         # Start both by default
-        print(f"Starting both FastAPI server and Web UI")
+        print("Starting both FastAPI server and Web UI")
         print(f"- FastAPI: http://{args.host}:{args.api_port}")
         print(f"- Web UI:  http://{args.host}:{args.web_port}")
         run_combined(args.host, args.api_port, args.web_port, args.threads)

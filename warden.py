@@ -1,6 +1,8 @@
 import argparse
 import os
 import multiprocessing
+from waitress import serve
+import uvicorn
 
 from audio_metrics import AudioMetricsCalculator
 from database import init_db  # Added to initialize DB on startup
@@ -74,51 +76,55 @@ def print_metrics_summary(metrics):
     print("-" * 50)
 
 
-def start_web_interface(host="127.0.0.1", port=5000, threads=4):
+def run_flask_app(host="127.0.0.1", port=5000, threads=4):
     """
-    Start the web UI using Waitress WSGI server.
+    Run the Flask web app using Waitress WSGI server
 
     Args:
         host: Host address to bind to
         port: Port to listen on
-        threads: Number of worker threads for Waitress
+        threads: Number of worker threads
     """
-    try:
-        # Use the consolidated server module
-        from server import run_flask_app
-
-        run_flask_app(host, port, threads)
-    except Exception as e:
-        # Log any errors that might occur during startup
-        print(f"Error starting web interface: {str(e)}")
-        print("Please ensure Waitress is installed: pip install waitress")
+    # Import applications
+    from wsgi import application as flask_app
+    serve(flask_app, host=host, port=port, threads=threads)
 
 
-def start_fastapi_server(host="127.0.0.1", port=8000, start_gui=False, threads=4):
+def run_fastapi_app(host="127.0.0.1", port=8000):
     """
-    Start the FastAPI server with optional web UI
+    Run the FastAPI application using Uvicorn
 
     Args:
-        host: Host address for FastAPI server
-        port: Port for FastAPI server
-        start_gui: Whether to also start the web UI with Waitress
-        threads: Number of Waitress worker threads
+        host: Host address to bind to
+        port: Port to listen on
     """
-    try:
-        # Use the consolidated server module
-        if start_gui:
-            # Run both FastAPI and Flask UI
-            from server import run_combined
+    # Import here to avoid circular imports
+    from fastapi_server import app as fastapi_app
+    uvicorn.run(fastapi_app, host=host, port=port)
 
-            run_combined(host, port, 5000, threads)
-        else:
-            # Run only FastAPI
-            from server import run_fastapi_app
 
-            run_fastapi_app(host, port)
-    except Exception as e:
-        print(f"Error starting server: {str(e)}")
-        print("Please check that all dependencies are installed")
+def run_combined(host="127.0.0.1", api_port=8000, web_port=5000, threads=4):
+    """
+    Start both FastAPI and Flask web UI servers using multiprocessing
+
+    Args:
+        host: Host address for both servers
+        api_port: Port for FastAPI server
+        web_port: Port for Flask web UI
+        threads: Number of threads for Waitress
+    """
+    # Start web UI in a separate process
+    web_process = multiprocessing.Process(
+        target=run_flask_app, args=(host, web_port, threads)
+    )
+    web_process.daemon = True
+    web_process.start()
+
+    print(f"Started Web UI at http://{host}:{web_port}")
+    print(f"Starting FastAPI server at http://{host}:{api_port}")
+    
+    # Run FastAPI in the main process
+    run_fastapi_app(host, api_port)
 
 
 def main():
@@ -137,29 +143,29 @@ def main():
         help="Directory to save processed audio files",
     )
     parser.add_argument(
-        "--gui",
-        action="store_true",
-        help="Start web interface for visualization alongside FastAPI",
-    )
-    parser.add_argument(
         "--process",
         action="store_true",
         help="Process audio files instead of starting servers",
     )
     parser.add_argument(
-        "--web",
+        "--web-only",
         action="store_true",
-        help="Legacy option: Start only web interface without FastAPI",
+        help="Start only the Flask web UI",
+    )
+    parser.add_argument(
+        "--api-only",
+        action="store_true",
+        help="Start only the FastAPI server",
     )
     parser.add_argument("--host", default="127.0.0.1", help="Host address for servers")
     parser.add_argument(
         "--api-port", type=int, default=8000, help="Port for FastAPI server"
     )
     parser.add_argument(
-        "--port", type=int, default=5000, help="Port for web interface (legacy)"
+        "--web-port", type=int, default=5000, help="Port for Flask web UI"
     )
     parser.add_argument(
-        "--workers", type=int, default=4, help="Number of Waitress worker threads"
+        "--threads", type=int, default=4, help="Number of Waitress worker threads"
     )
 
     args = parser.parse_args()
@@ -167,19 +173,27 @@ def main():
     # Ensure output directory exists
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
-        print(
-            f"Created output directory: {os.path.abspath(args.output_dir)}"
-        )  # Choose operation mode
+        print(f"Created output directory: {os.path.abspath(args.output_dir)}")
+
+    # Choose operation mode
     if args.process:
         # Process audio files mode
         print("Processing audio files")
         process_audio_files(args.input_dir, args.output_dir)
-    elif args.web:
-        # Legacy mode: only web UI
-        print("Starting web interface only (legacy mode)")
-        start_web_interface(args.host, args.port, args.workers)
-    else:  # Default mode: start FastAPI server with optional GUI
-        start_fastapi_server(args.host, args.api_port, args.gui, args.workers)
+    elif args.web_only:
+        # Start only the Flask web UI
+        print(f"Starting Web UI only at http://{args.host}:{args.web_port}")
+        run_flask_app(args.host, args.web_port, args.threads)
+    elif args.api_only:
+        # Start only the FastAPI server
+        print(f"Starting FastAPI server only at http://{args.host}:{args.api_port}")
+        run_fastapi_app(args.host, args.api_port)
+    else:
+        # Start both by default (with multiprocessing)
+        print("Starting both FastAPI server and Web UI")
+        print(f"- FastAPI: http://{args.host}:{args.api_port}")
+        print(f"- Web UI:  http://{args.host}:{args.web_port}")
+        run_combined(args.host, args.api_port, args.web_port, args.threads)
 
 
 if __name__ == "__main__":

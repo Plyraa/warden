@@ -50,11 +50,10 @@ warden/
 ├── audio_metrics.py       # Core audio analysis functionality
 ├── database.py            # Database management and models
 ├── fastapi_server.py      # FastAPI implementation for REST API
-├── server.py              # Consolidated server module (runs both FastAPI & Flask)
 ├── web_app.py             # Flask web application for UI
 ├── wsgi.py                # WSGI entry point for Flask application
 ├── visualization.py       # Data visualization module
-├── warden.py              # Main command-line interface
+├── warden.py              # Main command-line interface and server controller
 ├── requirements.txt       # Project dependencies
 ├── static/                # Static assets for web UI
 ├── templates/             # HTML templates for web UI
@@ -88,34 +87,35 @@ warden/
 
 ### Running the Application
 
-#### Starting Both FastAPI and Web UI
+#### Starting Both FastAPI and Web UI (Default)
 
 ```bash
-# Start both servers (FastAPI and Web UI)
-python server.py
+# Start both servers with multiprocessing (FastAPI and Web UI)
+python warden.py
 
-# Alternative using the main CLI:
-python warden.py --gui --host 127.0.0.1 --api-port 8000
+# Alternative with custom ports:
+python warden.py --api-port 8000 --web-port 5000 --threads 4
 ```
 
 #### Starting Only FastAPI Server
 
 ```bash
 # Start only the FastAPI server
-python server.py --api-only
-
-# Alternative using the main CLI:
-python warden.py --host 127.0.0.1 --api-port 8000
+python warden.py --api-only
 ```
 
 #### Starting Only Web UI
 
 ```bash
 # Start only the Web UI
-python server.py --web-only
+python warden.py --web-only
+```
 
-# Alternative using the main CLI:
-python warden.py --web --port 5000
+#### Processing Audio Files
+
+```bash
+# Process audio files from command line
+python warden.py --process
 ```
 
 ## Integration Guide for Third-Party Systems
@@ -169,45 +169,6 @@ The FastAPI server provides a simple REST API for batch processing audio files. 
 ]
 ```
 
-### Sample Integration Code
-
-```python
-import requests
-import json
-
-def analyze_audio_files(file_paths):
-    """
-    Send audio files for analysis using Warden API
-    
-    Args:
-        file_paths: List of local file paths or URLs
-        
-    Returns:
-        List of analysis results or None if request failed
-    """
-    try:
-        # Prepare the request
-        url = "http://127.0.0.1:8000/batch"
-        payload = {"file_paths": file_paths}
-        
-        # Send the request
-        response = requests.post(url, json=payload)
-        response.raise_for_status()
-        
-        # Return the analysis results
-        return response.json()
-        
-    except Exception as e:
-        print(f"Error analyzing audio files: {str(e)}")
-        return None
-
-# Example usage
-results = analyze_audio_files([
-    "C:/path/to/call_recording.mp3", 
-    "https://example.com/call_recording.mp3"
-])
-```
-
 This project provides tools for analyzing audio recordings of Jotform AI Agent calls. It can process audio files to extract various metrics and offers both a web interface for visualization and API endpoints for automated analysis.
 
 ## Requirements
@@ -215,67 +176,40 @@ This project provides tools for analyzing audio recordings of Jotform AI Agent c
 - Python 3.12
 - Pip
 
-## Installation
-
-1.  Clone the repository or download the project files.
-2.  Navigate to the project directory in your terminal.
-3.  Install the required Python packages using pip:
-
-    ```bash
-    pip install -r requirements.txt
-    ```
-
 ## Usage
 
 ### Running the Server
 
 Warden offers multiple ways to run the application:
 
-1. **Default Mode - FastAPI Server**:
+1. **Default Mode - Both FastAPI Server + Web UI**:
    ```bash
-   python .\warden.py
+   python warden.py
+   ```
+   This starts both the FastAPI server at `http://127.0.0.1:8000` and the Web UI at `http://127.0.0.1:5000` using multiprocessing.
+
+2. **API-only Mode**:
+   ```bash
+   python warden.py --api-only
    ```
    This starts only the FastAPI server at `http://127.0.0.1:8000` for batch processing.
 
-2. **Full Mode - FastAPI + Web UI**:
-   ```bash
-   python .\warden.py --gui
-   ```
-   This starts both the FastAPI server at `http://127.0.0.1:8000` and the Web UI at `http://127.0.0.1:5000` with Waitress.
-
 3. **Web-only Mode**:
    ```bash
-   python .\warden.py --web
+   python warden.py --web-only
    ```
    This starts only the web interface at `http://127.0.0.1:5000` using Waitress.
    
-   You can control the number of Waitress worker threads with the `--workers` parameter:
+   You can control the number of Waitress worker threads with the `--threads` parameter:
    ```bash
-   python .\warden.py --web --workers 8
+   python warden.py --web-only --threads 8
    ```
 
-4. **Direct Server Control**:
+4. **Audio Processing Mode**:
    ```bash
-   # Start both servers (recommended)
-   python .\server.py
-   
-   # Start only FastAPI server
-   python .\server.py --api-only
-   
-   # Start only Web UI
-   python .\server.py --web-only
+   python warden.py --process
    ```
-   
-5. **Processing Mode**:
-   ```bash
-   python .\warden.py --process
-   ```
-   This processes all audio files in the input directory without starting any servers.
-
-You can also use the provided batch script for convenience:
-```bash
-.\start_api_server.bat
-```
+   This processes audio files from the command line without starting any servers.
 
 #### API Endpoints
 
@@ -297,7 +231,7 @@ The FastAPI server provides the following endpoints:
    }
    ```
    - Both local file paths and URLs are supported
-   - URLs will be downloaded automatically by the server
+   - URLs will be downloaded and downsampled automatically by the server
    - Returns detailed metrics for each file, including:
      - Turn-taking latency points (moment and time)
      - Average, median (P50), P90, min, max latency
@@ -326,7 +260,7 @@ See `batch_client_example.py` for the full source code.
 To process audio files directly from the command line:
 
 ```bash
-python .\warden.py --input-dir <your_input_directory> --output-dir <your_output_directory>
+python warden.py --process --input-dir <your_input_directory> --output-dir <your_output_directory>
 ```
 
 Replace `<your_input_directory>` with the path to the directory containing your audio files (e.g., `stereo_test_calls`) and `<your_output_directory>` with the path where processed files should be saved (e.g., `sampled_test_calls`).
@@ -336,18 +270,22 @@ If you omit `--input-dir` and `--output-dir`, it will default to `stereo_test_ca
 For example:
 
 ```bash
-python .\warden.py
+python warden.py --process
 ```
 
 This will process files from `stereo_test_calls` and save results to `sampled_test_calls`.
 
 ### Available Command-Line Arguments
 
+*   `--process`: Process audio files instead of starting servers.
 *   `--input-dir`: Directory containing input audio files (default: `stereo_test_calls`).
 *   `--output-dir`: Directory to save processed audio files (default: `sampled_test_calls`).
-*   `--web`: Start the web interface for visualization.
-*   `--host`: Host address for the web interface (default: `127.0.0.1`).
-*   `--port`: Port for the web interface (default: `5000`).
+*   `--web-only`: Start only the Flask web UI.
+*   `--api-only`: Start only the FastAPI server.
+*   `--host`: Host address for servers (default: `127.0.0.1`).
+*   `--api-port`: Port for FastAPI server (default: `8000`).
+*   `--web-port`: Port for Flask web UI (default: `5000`).
+*   `--threads`: Number of Waitress worker threads (default: `4`).
 
 ## Features
 
@@ -368,8 +306,8 @@ The system now includes advanced transcription capabilities:
 - Speech-to-text conversion using ElevenLabs Scribe API
 - Word-level timing for precise analysis
 - Speaker diarization (separating user and AI agent speech)
-- **NEW: Speech overlap detection and highlighting**
-- **NEW: Enhanced visualization of speech patterns**
+- Speech overlap detection and highlighting
+- Enhanced visualization of speech patterns
 
 ### Speech Overlap Analysis
 The new overlap detection feature identifies moments when:
@@ -386,19 +324,21 @@ This data is visualized in several ways:
 
 ### Server Architecture
 
-The server architecture has been simplified and consolidated. The new design uses:
+The server architecture has been consolidated into a single entry point. The new design uses:
 
-- **Waitress** as the WSGI server for the Flask web UI (replacing Gunicorn)
+- **Waitress** as the WSGI server for the Flask web UI
 - **Uvicorn** as the ASGI server for FastAPI
+- **Multiprocessing** to run both servers simultaneously
 
-The `server.py` module is the central component that can:
+The `warden.py` module is the central component that can:
 1. Run either server independently
 2. Run both servers simultaneously (with web UI in a separate process)
-3. Handle command-line arguments for flexible configuration
+3. Process audio files from command line
+4. Handle command-line arguments for flexible configuration
 
 ```
 ┌─────────────────────────────────────────┐
-│             server.py                   │
+│             warden.py                   │
 ├─────────────┬─────────────┬─────────────┤
 │ run_flask   │ run_fastapi │ run_combined│
 │   (web UI)  │   (API)     │ (both)      │
@@ -507,27 +447,6 @@ The script will:
 3. For URLs: process MP3 files from the provided URLs
 4. Send the combined list to the Warden batch API endpoint
 5. Display detailed metrics for each processed file
-
-### Batch Client Example Output
-
-The script displays comprehensive metrics for each processed file:
-
-- **Basic Info**: File name and path
-- **Latency Metrics**: Average, P50/P90, Min/Max latency
-- **Interruption Detection**: Whether AI or user interrupted each other
-- **Overlap Counts**: Number of AI→User and User→AI overlaps
-- **Other Metrics**: Talk ratio, average pitch, words per minute
-- **Latency Points**: First 5 latency points with timestamp and value
-
-### Adapting the Batch Client Example
-
-You can modify the example script for your specific needs:
-
-1. **Change the server URL**: If you're running the server on a different host or port
-2. **Add more URLs**: Include additional URLs in the `mp3_urls` list
-3. **Process different local files**: Modify the directory path in `base_dir`
-4. **Custom error handling**: Enhance the exception handling for your use case
-5. **Output formatting**: Change how results are displayed or save them to a file
 
 ## Integrating with Other Systems
 

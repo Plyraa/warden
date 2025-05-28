@@ -1,7 +1,6 @@
 import requests
 import os
 import time
-import json
 from urllib.parse import urlparse
 
 # Example script to demonstrate using the Warden batch API endpoint

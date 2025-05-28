@@ -1,18 +1,15 @@
 import os
-import time
 import traceback
 from typing import List, Dict, Any
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
-import requests
-from urllib.parse import urlparse
+from url_helper import is_url, download_audio_from_url
 
 # Import Warden modules
 from audio_metrics import AudioMetricsCalculator
 from database import init_db
 from fastapi.middleware.cors import CORSMiddleware
-from web_app import app as web_app
 
 
 class AudioFileList(BaseModel):
@@ -72,7 +69,6 @@ calculator = AudioMetricsCalculator()
 
 
 # Import the enhanced URL helpers
-from url_helper import is_url, download_audio_from_url
 
 
 @app.get("/")
@@ -132,7 +128,7 @@ def analyze_batch(audio_files: AudioFileList):
             # Process the file
             print(f"Calling process_file with filename: {filename}")
             metrics = calculator.process_file(filename)
-            print(f"process_file successful, received metrics")
+            print("process_file successful, received metrics")
 
             # Extract the latency points
             latency_points = []
@@ -230,7 +226,7 @@ def analyze_batch(audio_files: AudioFileList):
 
 def start_web_app(host="127.0.0.1", port=5000, threads=4):
     """Start web app with Waitress WSGI server"""
-    from server import run_flask_app
+    from warden import run_flask_app
 
     # Run the web application with Waitress
     run_flask_app(host, port, threads)
@@ -238,6 +234,7 @@ def start_web_app(host="127.0.0.1", port=5000, threads=4):
 
 if __name__ == "__main__":
     # For backward compatibility, import and use warden's functionality
-    from warden import start_fastapi_server
+    from warden import run_combined
 
-    start_fastapi_server(host="127.0.0.1", port=8000, start_gui=True)
+    # Start both FastAPI and Flask web UI
+    run_combined(host="127.0.0.1", api_port=8000, web_port=5000, threads=4)

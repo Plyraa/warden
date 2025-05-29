@@ -1560,8 +1560,8 @@ class AudioMetricsCalculator:
                     audio, sr, agent_speech_turns
                 ),
                 "transcript_data": transcript_data,
-            }  # No placeholder transcript generation - user requested removal
-            # The "no transcript data available" message will be shown when transcript fails            # Add new analysis to database
+            }
+            # The "no transcript data available" message will be shown when transcript fails
             add_analysis(db_session, metrics)
             print(
                 f"Saved new analysis for {base_filename} to database with improved transcript handling."

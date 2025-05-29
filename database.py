@@ -38,12 +38,6 @@ class AudioAnalysis(Base):
     downsampled_filepath = Column(String, nullable=False)
     analysis_timestamp = Column(DateTime(timezone=True), server_default=func.now())
 
-    # Legacy latency metrics (using activity windows)
-    avg_latency_ms = Column(Float)
-    p10_latency_ms = Column(Float)
-    p50_latency_ms = Column(Float)
-    p90_latency_ms = Column(Float)
-
     # VAD-based latency metrics (using Silero VAD)
     vad_avg_latency = Column(Float)
     vad_min_latency = Column(Float)
@@ -59,13 +53,10 @@ class AudioAnalysis(Base):
     average_pitch_hz = Column(Float)
     words_per_minute = Column(Float)
 
-    user_speech_segments_json = Column(String)  # JSON string
     user_vad_segments_json = Column(String)  # JSON string for VAD-detected segments
-    agent_speech_segments_json = Column(String)  # JSON string
     agent_vad_segments_json = Column(
         String
     )  # JSON string for agent VAD-detected segments
-    agent_answer_latencies_ms_json = Column(String)  # JSON string
     overlap_data_json = Column(String)  # JSON string for overlap detection data
 
     # Relationship to Transcript
@@ -124,15 +115,11 @@ def get_db():
 
 
 def add_analysis(db_session, metrics_data):
-    user_windows_json = json.dumps(metrics_data.get("user_windows", []))
-    agent_windows_json = json.dumps(metrics_data.get("agent_windows", []))
-    agent_latencies_json = json.dumps(metrics_data.get("agent_answer_latencies", []))
     user_vad_segments_json = json.dumps(metrics_data.get("user_vad_segments", []))
     agent_vad_segments_json = json.dumps(metrics_data.get("agent_vad_segments", []))
     vad_latency_details_json = json.dumps(metrics_data.get("vad_latency_details", []))
     overlap_data_json = json.dumps(metrics_data.get("overlap_data", {}))
 
-    latency_metrics = metrics_data.get("latency_metrics", {})
     vad_latency_metrics = metrics_data.get("vad_latency_metrics", {})
     transcript_data = metrics_data.get("transcript_data")
 
@@ -141,11 +128,6 @@ def add_analysis(db_session, metrics_data):
         source_url=metrics_data.get("source_url"),  # Add source URL support
         downsampled_filepath=metrics_data["downsampled_path"],
         analysis_timestamp=datetime.datetime.now(datetime.timezone.utc),
-        # Legacy latency metrics
-        avg_latency_ms=latency_metrics.get("avg_latency"),
-        p10_latency_ms=latency_metrics.get("p10_latency"),
-        p50_latency_ms=latency_metrics.get("p50_latency"),
-        p90_latency_ms=latency_metrics.get("p90_latency"),
         # VAD-based latency metrics
         vad_avg_latency=vad_latency_metrics.get("avg_latency"),
         vad_min_latency=vad_latency_metrics.get("min_latency"),
@@ -161,11 +143,8 @@ def add_analysis(db_session, metrics_data):
         average_pitch_hz=metrics_data.get("average_pitch"),
         words_per_minute=metrics_data.get("words_per_minute"),
         # Segments
-        user_speech_segments_json=user_windows_json,
         user_vad_segments_json=user_vad_segments_json,
-        agent_speech_segments_json=agent_windows_json,
         agent_vad_segments_json=agent_vad_segments_json,
-        agent_answer_latencies_ms_json=agent_latencies_json,
         overlap_data_json=overlap_data_json,
     )
 
@@ -187,7 +166,6 @@ def add_analysis(db_session, metrics_data):
             ),
         )
         db_analysis.transcript = db_transcript
-        # db_session.add(db_transcript) # Handled by relationship cascade
 
     db_session.add(db_analysis)
     db_session.commit()
@@ -220,12 +198,6 @@ def recreate_metrics_from_db(db_record: AudioAnalysis):
     metrics = {
         "filename": db_record.original_filename,
         "downsampled_path": db_record.downsampled_filepath,
-        "latency_metrics": {
-            "avg_latency": db_record.avg_latency_ms,
-            "p10_latency": db_record.p10_latency_ms,
-            "p50_latency": db_record.p50_latency_ms,
-            "p90_latency": db_record.p90_latency_ms,
-        },
         "vad_latency_metrics": {
             "avg_latency": db_record.vad_avg_latency,
             "min_latency": db_record.vad_min_latency,
@@ -235,17 +207,12 @@ def recreate_metrics_from_db(db_record: AudioAnalysis):
             "p90_latency": db_record.vad_p90_latency,
         },
         "vad_latency_details": json.loads(db_record.vad_latency_details_json or "[]"),
-        "agent_answer_latencies": json.loads(
-            db_record.agent_answer_latencies_ms_json or "[]"
-        ),
         "ai_interrupting_user": db_record.ai_interrupting_user,
         "user_interrupting_ai": db_record.user_interrupting_ai,
         "talk_ratio": db_record.talk_ratio,
         "average_pitch": db_record.average_pitch_hz,
         "words_per_minute": db_record.words_per_minute,
-        "user_windows": json.loads(db_record.user_speech_segments_json or "[]"),
         "user_vad_segments": json.loads(db_record.user_vad_segments_json or "[]"),
-        "agent_windows": json.loads(db_record.agent_speech_segments_json or "[]"),
         "agent_vad_segments": json.loads(db_record.agent_vad_segments_json or "[]"),
         "overlap_data": json.loads(db_record.overlap_data_json or "{}"),
         "analysis_timestamp": db_record.analysis_timestamp,

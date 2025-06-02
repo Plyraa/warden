@@ -66,8 +66,8 @@ app.add_middleware(
     allow_headers=["*"],  # Allows all headers
 )
 
-# Create calculator instance
-calculator = AudioMetricsCalculator()
+# Create calculator instance for batch processing (ElevenLabs disabled for cost optimization)
+calculator = AudioMetricsCalculator(batch_only=True)
 
 
 # Import the enhanced URL helpers

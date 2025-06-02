@@ -23,20 +23,32 @@ load_dotenv()
 
 
 class AudioMetricsCalculator:
-    def __init__(self, input_dir="stereo_test_calls", output_dir="sampled_test_calls"):
-        """Initialize the calculator with input and output directories"""
+    def __init__(self, input_dir="stereo_test_calls", output_dir="sampled_test_calls", batch_only=False):
+        """Initialize the calculator with input and output directories
+        
+        Args:
+            input_dir: Directory containing input audio files
+            output_dir: Directory to save processed audio files
+            batch_only: If True, skips ElevenLabs transcription for batch processing
+        """
         self.input_dir = input_dir
         self.output_dir = output_dir
+        self.batch_only = batch_only
         self.elevenlabs_client = None
-        # ELEVENLABS_API_KEY is now loaded from .env by load_dotenv()
-        # os.getenv will retrieve it if it was successfully loaded into the environment
-        elevenlabs_api_key = os.getenv("ELEVENLABS_API_KEY")
-        if elevenlabs_api_key:
-            self.elevenlabs_client = ElevenLabs(api_key=elevenlabs_api_key)
+        
+        # Skip ElevenLabs initialization in batch-only mode
+        if not batch_only:
+            # ELEVENLABS_API_KEY is now loaded from .env by load_dotenv()
+            # os.getenv will retrieve it if it was successfully loaded into the environment
+            elevenlabs_api_key = os.getenv("ELEVENLABS_API_KEY")
+            if elevenlabs_api_key:
+                self.elevenlabs_client = ElevenLabs(api_key=elevenlabs_api_key)
+            else:
+                print(
+                    "WARNING: ELEVENLABS_API_KEY not found in .env file or environment. Transcription will be skipped."
+                )
         else:
-            print(
-                "WARNING: ELEVENLABS_API_KEY not found in .env file or environment. Transcription will be skipped."
-            )
+            print("INFO: Running in batch-only mode. ElevenLabs transcription disabled.")
 
         # Silero VAD model - will be lazy loaded when needed
         self.vad_model = None
@@ -1429,10 +1441,8 @@ class AudioMetricsCalculator:
                 _audio, _sr, _output_path = self.downsample_audio(
                     filename
                 )  # audio and sr not used here
-                metrics["downsampled_path"] = _output_path  # Store the path
-
-                # Only try to get transcript if ElevenLabs client is available and transcript is missing
-                if not metrics.get("transcript_data") and self.elevenlabs_client:
+                metrics["downsampled_path"] = _output_path  # Store the path                # Only try to get transcript if ElevenLabs client is available, transcript is missing, and not in batch_only mode
+                if not metrics.get("transcript_data") and self.elevenlabs_client and not self.batch_only:
                     # Attempt to get transcript if EL client available and no transcript in DB
                     print(
                         f"Transcript data missing for {filename} (from DB), attempting to generate from audio."
@@ -1499,9 +1509,10 @@ class AudioMetricsCalculator:
                 else:
                     print(f"Transcription failed or yielded no data for {filename}.")
             else:
-                print(
-                    f"Skipping transcription for {filename} (ElevenLabs client not configured)."
-                )
+                if self.batch_only:
+                    print(f"Skipping transcription for {filename} (running in batch-only mode).")
+                else:
+                    print(f"Skipping transcription for {filename} (ElevenLabs client not configured).")
 
             # Create combined and merged speaker turns
             print("Creating combined speaker turns...")

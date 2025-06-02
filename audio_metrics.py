@@ -657,10 +657,10 @@ class AudioMetricsCalculator:
         speech_timestamps = get_speech_timestamps(
             tensor_audio,
             model,
-            threshold=0.72,  # Higher threshold means more aggressive voice activity detection
+            threshold=0.7,  # Higher threshold means more aggressive voice activity detection
             sampling_rate=self.sampling_rate,
             min_silence_duration_ms=100,  # Minimum silence duration between speech chunks in ms
-            min_speech_duration_ms=200,  # Minimum speech duration to be detected
+            min_speech_duration_ms=100,  # Minimum speech duration to be detected
             return_seconds=True,  # Get timestamps directly in seconds
         )
         """

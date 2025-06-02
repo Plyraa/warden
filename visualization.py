@@ -457,11 +457,14 @@ class AudioVisualizer:
         vad_latency_img = self.generate_vad_latency_timeline(
             vad_latency_details, duration, filename
         )
+        
         return {
             "waveform_img": waveform_img,
             "speech_overlap_img": speech_overlap_img,
             "metrics_table": metrics_table,
             "vad_latency_img": vad_latency_img,
+            "vad_latency_details": vad_latency_details,  # Add latency details for interactive chart
+            "audio_duration": duration,  # Add duration for chart scaling
             "filename": filename,
             "transcript_dialog": transcript_dialog,
         }

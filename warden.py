@@ -78,16 +78,20 @@ def print_metrics_summary(metrics):
 
 def run_flask_app(host="127.0.0.1", port=5000, threads=4):
     """
-    Run the Flask web app using Waitress WSGI server
+    This function serves the Flask application using Waitress
 
     Args:
         host: Host address to bind to
         port: Port to listen on
         threads: Number of worker threads
     """
-    # Import applications
-    from wsgi import application as flask_app
 
+    from web_app import app
+
+    # This allows Waitress to import the application object
+    flask_app = app
+    
+    # Use Waitress to serve the Flask app
     serve(flask_app, host=host, port=port, threads=threads)
 
 

@@ -65,44 +65,64 @@ curl -X POST "http://localhost:8000/batch" \
 
 ```json
 {
-  "file_path": "test1.mp3",
-  "filename": "test1.mp3", 
+  "file_path": "C:\\Users\\...\\stereo_test_calls\\243801406824559add7684.37683750.mp3",
+  "filename": "243801406824559add7684.37683750.mp3", 
   "status": "success",
-  "latency_points": [{"moment": "AI response", "latency_ms": 1240}],
-  "average_latency": 1150.5,
-  "p50_latency": 1100.0,
-  "p90_latency": 1800.0,
-  "min_latency": 650.0,
-  "max_latency": 2100.0,
+  "error_message": null,
+  "latency_points": [
+    {"latency_ms": 1000.0, "moment": 5.2},
+    {"latency_ms": 3099.9999999999977, "moment": 20.9}
+  ],
+  "average_latency": 2400.000000000002,
+  "p50_latency": 2500.0,
+  "p90_latency": 3899.9999999999914,
+  "min_latency": 200.00000000001705,
+  "max_latency": 4099.9999999999945,
   "ai_interrupting_user": false,
   "user_interrupting_ai": true,
   "ai_user_overlap_count": 0,
-  "user_ai_overlap_count": 2,
-  "talk_ratio": 0.75,
-  "average_pitch": 142.3,
-  "words_per_minute": 128.5
+  "user_ai_overlap_count": 4,
+  "talk_ratio": 4.734426229508204,
+  "average_pitch": 320.99127197265625,
+  "words_per_minute": 206.37119113573402
 }
 ```
 
-## Testing
+**Field Descriptions:**
+- `file_path`: Full absolute path to the processed audio file
+- `filename`: Just the filename portion
+- `status`: "success" or "error"
+- `error_message`: null on success, error description on failure
+- `latency_points`: List of detected latency measurements
+  - `latency_ms`: Response latency in milliseconds
+  - `moment`: Time position in the audio file (seconds)
+- `average_latency`: Mean latency across all measurements (ms)
+- `p50_latency`/`p90_latency`: 50th/90th percentile latencies (ms)
+- `min_latency`/`max_latency`: Minimum/maximum detected latencies (ms)
+- `ai_interrupting_user`/`user_interrupting_ai`: Boolean overlap detection
+- `ai_user_overlap_count`/`user_ai_overlap_count`: Number of interruptions
+- `talk_ratio`: Ratio of user speech time to AI speech time
+- `average_pitch`: Mean pitch frequency (Hz)
+- `words_per_minute`: Speech rate calculation
 
-### Streaming Tests
-```bash
-# Test with curl
-tests/test_curl_streaming.bat
+## Project Structure
 
-# Test with Python  
-python tests/test_real_streaming.py
-```
+### Core Files
+- **`warden.py`** - Main entry point, orchestrates API and Web UI servers
+- **`audio_metrics.py`** - Core audio analysis engine with latency/overlap detection
+- **`fastapi_server.py`** - FastAPI server providing REST endpoints for batch processing
+- **`web_app.py`** - Flask web interface for interactive file upload and visualization
+- **`database.py`** - SQLite database operations for storing analysis results
+- **`url_helper.py`** - URL processing and remote file download utilities
+- **`visualization.py`** - Chart generation and data visualization components
+- **`update_database.py`** - Database schema migration and update utility
 
-### Standard Tests
-```bash
-# Test batch API
-python batch_client_example.py
-
-# Test transcription
-python test_elevenlabs_transcript.py
-```
+### Directories
+- **`templates/`** - HTML templates for the web interface
+- **`static/`** - Static assets (images, CSS, JS) for web UI
+- **`database/`** - SQLite database files storage
+- **`stereo_test_calls/`** - Sample stereo audio files for testing (User=Left, AI=Right)
+- **`sampled_test_calls/`** - Downsampled audio files for faster processing
 
 ## Audio Requirements
 
@@ -137,7 +157,7 @@ python warden.py [options]
 ┌─────────────────┐    ┌─────────────────┐
 │   FastAPI       │    │   Flask Web UI  │
 │   (Port 8000)   │    │   (Port 5000)   │
-│                 │    │                 │
+│                 │    │   via Waitress  │
 │ • /batch        │    │ • Visualization │
 │ • /batch-stream │    │ • File Upload   │
 │ • /health       │    │ • Interactive   │
@@ -150,24 +170,4 @@ python warden.py [options]
            │ + Database         │
            │ + Transcription    │
            └────────────────────┘
-```
-
-## Integration Examples
-
-### Python Client
-```python
-import requests
-import json
-
-# Streaming processing
-response = requests.post(
-    "http://localhost:8000/batch-stream",
-    json={"file_paths": ["file1.mp3", "file2.mp3"]},
-    stream=True
-)
-
-for line in response.iter_lines(decode_unicode=True):
-    if line.strip():
-        result = json.loads(line)
-        print(f"✅ {result['filename']}: {result['average_latency']:.1f}ms")
 ```

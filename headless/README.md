@@ -130,11 +130,8 @@ class Config:
 # Install production dependencies
 pip install -r requirements.txt
 
-# Run with Uvicorn (production ASGI server)
-uvicorn app:app --host 0.0.0.0 --port 8000 --workers 4
-
 # Or use the built-in startup
-python app.py
+python start.py
 ```
 
 ## 📁 File Input Options

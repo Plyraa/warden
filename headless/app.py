@@ -348,8 +348,3 @@ async def analyze_batch_stream(audio_files: AudioFileList):
         media_type="application/x-ndjson",
         headers={"Cache-Control": "no-cache"},
     )
-
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host=Config.HOST, port=Config.PORT)

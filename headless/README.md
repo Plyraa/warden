@@ -182,7 +182,6 @@ headless/
 
 ## 🔒 Security Notes
 
-- File size limits prevent resource exhaustion
 - URL validation for safe downloads
 - Temporary file cleanup
 - Input sanitization and validation

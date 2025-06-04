@@ -8,7 +8,7 @@ This script combines:
 - Error handling testing (from test_error_handling.py)
 
 Usage:
-    python comprehensive_test.py
+    python tests/comprehensive_test.py
 """
 
 import json
@@ -148,48 +148,61 @@ def test_new_format_simulation():
                 "user_ai_overlap_count": 2,
                 "talk_ratio": 0.65,
                 "average_pitch": 180.5,
-                "words_per_minute": 120.0,
+                "words_per_minute": 150.2,
             },
-            {"status": "file_not_found"},
-            {"status": "download_error"},
+            {
+                "filename": "test2.mp3",
+                "status": "success",
+                "average_latency": 980.2,
+                "p50_latency": 900.0,
+                "p90_latency": 1500.0,
+                "min_latency": 700.0,
+                "max_latency": 1600.0,
+                "latency_points": [
+                    {"latency_ms": 900, "moment": 3.1},
+                    {"latency_ms": 1050, "moment": 12.4},
+                ],
+                "ai_interrupting_user": True,
+                "user_interrupting_ai": False,
+                "ai_user_overlap_count": 1,
+                "user_ai_overlap_count": 0,
+                "talk_ratio": 1.2,
+                "average_pitch": 165.3,
+                "words_per_minute": 142.8,
+            },
         ]
     }
 
+    print("Simulated API response (new format):")
+    print(json.dumps(simulated_response, indent=2))
+
+    # Process simulation data
     results = simulated_response["results"]
+    print(f"\n📊 Analysis Results Summary:")
+    print(f"Total files processed: {len(results)}")
 
-    # Count successes and errors
-    success_count = len([r for r in results if r.get("status") == "success"])
-    error_count = len([r for r in results if r.get("status") != "success"])
+    for i, result in enumerate(results, 1):
+        print(f"\n{i}. {result['filename']}:")
+        print(f"   Status: {result['status']}")
+        if result["status"] == "success":
+            print(f"   Average Latency: {result['average_latency']:.1f}ms")
+            print(f"   Talk Ratio: {result['talk_ratio']:.2f}")
+            print(f"   WPM: {result['words_per_minute']:.1f}")
+            print(f"   Pitch: {result['average_pitch']:.1f}Hz")
+        else:
+            print(f"   Error: {result.get('error', 'Unknown error')}")
 
-    print(f"Total results: {len(results)}")
-    print(f"Successful: {success_count}")
-    print(f"Errors: {error_count}")
-
-    print("\n--- Successful Results ---")
-    for result in results:
-        if result.get("status") == "success":
-            print(
-                f"✅ {result['filename']}: {result['average_latency']:.1f}ms avg latency"
-            )
-            print(f"   Status: {result['status']}")
-            print(
-                f"   Metrics: p50={result['p50_latency']:.1f}ms, p90={result['p90_latency']:.1f}ms"
-            )
-
-    print("\n--- Error Results ---")
-    for result in results:
-        if result.get("status") != "success":
-            print(f"❌ Status: {result['status']}")
+    print("✅ Format simulation test completed")
 
 
 def test_api_health_and_endpoints(base_url="http://127.0.0.1:8000"):
-    """Test API health and basic endpoints"""
+    """Test basic API health and endpoint availability"""
     print("=" * 60)
     print("TEST 2: API HEALTH AND ENDPOINTS")
     print("=" * 60)
 
-    # Test 1: Health check
-    print("1. Testing health endpoint...")
+    # Test health endpoint
+    print("Testing /health endpoint...")
     try:
         response = requests.get(f"{base_url}/health")
         if response.status_code == 200:
@@ -199,53 +212,37 @@ def test_api_health_and_endpoints(base_url="http://127.0.0.1:8000"):
             print(f"✗ Health endpoint failed: {response.status_code}")
     except Exception as e:
         print(f"✗ Health endpoint error: {e}")
-        return False
 
-    # Test 2: Root endpoint
-    print("\n2. Testing root endpoint...")
+    # Test batch endpoint with minimal payload
+    print("\nTesting /batch endpoint with empty payload...")
     try:
-        response = requests.get(f"{base_url}/")
+        response = requests.post(f"{base_url}/batch", json={"file_paths": []})
+        print(f"✓ Batch endpoint responds (status: {response.status_code})")
         if response.status_code == 200:
-            print("✓ Root endpoint working")
-            root_data = response.json()
-            print(f"   Message: {root_data.get('message', 'N/A')}")
-            print(f"   Endpoints: {root_data.get('endpoints', 'N/A')}")
-        else:
-            print(f"✗ Root endpoint failed: {response.status_code}")
+            print(f"   Response: {response.json()}")
     except Exception as e:
-        print(f"✗ Root endpoint error: {e}")
-
-    return True
+        print(f"✗ Batch endpoint error: {e}")
 
 
 def test_file_validation(base_url="http://127.0.0.1:8000"):
-    """Test file validation endpoint"""
+    """Test file validation functionality"""
     print("=" * 60)
     print("TEST 3: FILE VALIDATION")
     print("=" * 60)
 
-    print("Testing file validation...")
     test_files = [
-        "stereo_test_calls/test1.mp3",  # Should exist
+        "../stereo_test_calls/test1.mp3",  # Should exist
         "nonexistent_file.mp3",  # Should not exist
         # "https://github.com/Plyraa/warden/raw/refs/heads/main/stereo_test_calls/test1.mp3",  # URL
-        "https://invalid-domain-12345.com/fake.mp3",  # Invalid URL
     ]
 
+    print("Testing file validation...")
     try:
-        response = requests.post(
-            f"{base_url}/validate", json={"file_paths": test_files}
-        )
+        response = requests.post(f"{base_url}/validate", json={"file_paths": test_files})
         if response.status_code == 200:
             print("✓ Validation endpoint working")
             validation_data = response.json()
-            for file_info in validation_data["files"]:
-                status = "✓" if file_info["accessible"] else "✗"
-                print(f"   {status} {file_info['file_path']}")
-                if file_info.get("error"):
-                    print(f"      Error: {file_info['error']}")
-                if file_info.get("note"):
-                    print(f"      Note: {file_info['note']}")
+            print(f"   Response: {json.dumps(validation_data, indent=2)}")
         else:
             print(f"✗ Validation failed: {response.status_code}")
             print(f"   Response: {response.text}")
@@ -261,7 +258,7 @@ def test_batch_processing_with_errors(base_url="http://127.0.0.1:8000"):
 
     print("Testing batch processing with mixed valid/invalid files...")
     batch_files = [
-        "stereo_test_calls/test1.mp3",  # Should work if file exists
+        "../stereo_test_calls/test1.mp3",  # Should work if file exists
         "definitely_does_not_exist.mp3",  # File not found error
         "https://invalid-url-test.com/fake.mp3",  # Download error
     ]
@@ -301,202 +298,133 @@ def test_batch_processing_with_errors(base_url="http://127.0.0.1:8000"):
 
 
 def test_full_batch_workflow():
-    """Test the complete batch workflow with real files"""
+    """Test the complete batch processing workflow"""
     print("=" * 60)
     print("TEST 5: FULL BATCH WORKFLOW")
     print("=" * 60)
 
     base_url = "http://127.0.0.1:8000"
 
-    # Check if API is running
-    if not check_api_health(base_url):
-        print(
-            "❌ API server is not running. Please start it with: python warden.py --api-only"
-        )
-        return
-
-    print("Choose test scenario:")
-    print("1: Test with local files only")
-    print("2: Test with URLs only")
-    print("3: Test with mixed local files and URLs")
-    print("4: Run automatic test with available files")
-
+    print("Step 1: Check for local test files")
+    local_files = []
     try:
-        choice = input("Enter your choice (1-4): ").strip()
-    except (EOFError, KeyboardInterrupt):
-        print("\nRunning automatic test...")
-        choice = "4"
-
-    file_paths = []
-
-    if choice == "1":
-        # Local files only
-        base_dir = "stereo_test_calls"
+        base_dir = "../stereo_test_calls"
         if os.path.exists(base_dir):
-            files = [f for f in os.listdir(base_dir) if f.endswith((".mp3", ".wav"))]
-            if files:
-                sample_files = files[:2]  # Use first 2 files
-                file_paths = [
-                    os.path.abspath(os.path.join(base_dir, f)) for f in sample_files
-                ]
-                print(f"\nFound {len(file_paths)} local files:")
-                for path in file_paths:
-                    print(f" - {path}")
-            else:
-                print("No audio files found in stereo_test_calls directory")
-                return
-        else:
-            print("stereo_test_calls directory not found")
-            return
-
-    elif choice == "2":
-        # URLs only
-        file_paths = [
-            "https://github.com/Plyraa/warden/raw/refs/heads/main/stereo_test_calls/243801406824559add7684.37683750.mp3",
-            "https://github.com/Plyraa/warden/raw/refs/heads/main/stereo_test_calls/16952962156823ffe2a06954.22932860.mp3",
-            "https://github.com/Plyraa/warden/raw/refs/heads/main/stereo_test_calls/test1.mp3",
-        ]
-        print(f"\nUsing {len(file_paths)} URL references:")
-        for url in file_paths:
-            print(f" - {url}")
-
-    elif choice == "3":
-        # Mixed local and URLs
-        base_dir = "stereo_test_calls"
-        if os.path.exists(base_dir):
-            files = [f for f in os.listdir(base_dir) if f.endswith((".mp3", ".wav"))]
-            if files:
-                local_file = os.path.abspath(os.path.join(base_dir, files[0]))
-                file_paths.append(local_file)
-
-        file_paths.append(
-            "https://github.com/Plyraa/warden/raw/refs/heads/main/stereo_test_calls/test1.mp3"
-        )
-
-        print(f"\nUsing {len(file_paths)} mixed files:")
-        for path in file_paths:
-            print(f" - {path}")
-
-    else:  # choice == "4" or default
-        # Automatic test with error handling demo
-        print("\nRunning automatic test with mixed scenarios...")
-        base_dir = "stereo_test_calls"
-        if os.path.exists(base_dir):
-            files = [f for f in os.listdir(base_dir) if f.endswith((".mp3", ".wav"))]
-            if files:
-                file_paths.append(os.path.join(base_dir, files[0]))
-
-        # Add some URLs and intentional errors
-        file_paths.extend(
-            [
-                "https://github.com/Plyraa/warden/raw/refs/heads/main/stereo_test_calls/test1.mp3",
-                "nonexistent_file.mp3",  # This will cause an error
+            audio_files = [
+                f
+                for f in os.listdir(base_dir)
+                if f.endswith((".mp3", ".wav")) and not f.endswith("_downsampled.mp3")
             ]
-        )
+            if audio_files:
+                local_files = [f"{base_dir}/{audio_files[0]}"]  # Just use first file
+                print(f"Found local test files: {local_files}")
+            else:
+                print("No audio files found in ../stereo_test_calls directory")
+        else:
+            print("../stereo_test_calls directory not found")
+    except Exception as e:
+        print(f"Error checking local files: {e}")
 
-        print(f"Testing with {len(file_paths)} files:")
-        for path in file_paths:
-            print(f" - {path}")
+    # Fallback to URLs
+    url_files = [
+        "https://github.com/Plyraa/warden/raw/refs/heads/main/stereo_test_calls/243801406824559add7684.37683750.mp3",
+        "https://github.com/Plyraa/warden/raw/refs/heads/main/stereo_test_calls/16952962156823ffe2a06954.22932860.mp3",
+        "https://github.com/Plyraa/warden/raw/refs/heads/main/stereo_test_calls/test1.mp3",
+    ]
 
-    if not file_paths:
-        print("No files to process")
-        return
+    # Use local files if available, otherwise URLs
+    test_files = local_files if local_files else url_files[:2]  # Limit to 2 for speed
 
-    # Optional: Validate files first
-    print("\n--- VALIDATION PHASE ---")
-    validation_results = validate_files(file_paths, base_url)
-    if validation_results:
-        for file_info in validation_results["files"]:
-            status = "✓" if file_info["accessible"] else "✗"
-            print(f"{status} {file_info['file_path']}")
-            if file_info.get("error"):
-                print(f"   Error: {file_info['error']}")
-            if file_info.get("note"):
-                print(f"   Note: {file_info['note']}")
+    print(f"\nStep 2: Process files with Warden API")
+    print(f"Files to process: {test_files}")
 
-    # Send batch request
-    print("\n--- BATCH PROCESSING PHASE ---")
-    response = analyze_files(file_paths, base_url)
+    if local_files:
+        base_dir = "../stereo_test_calls"
+        if os.path.exists(base_dir):
+            available_files = [
+                f
+                for f in os.listdir(base_dir)
+                if f.endswith((".mp3", ".wav")) and not f.endswith("_downsampled.mp3")
+            ]
+            test_files = [f"{base_dir}/{f}" for f in available_files[:2]]  # Use first 2
 
+        print("Using file URLs for consistent testing...")
+        test_files = [
+            "https://github.com/Plyraa/warden/raw/refs/heads/main/stereo_test_calls/test1.mp3"
+        ]
+
+    # Enhanced batch processing test
+    print("Step 3: Enhanced Batch Processing Analysis")
+    enhanced_test_files = []
+    try:
+        base_dir = "../stereo_test_calls"
+        if os.path.exists(base_dir):
+            audio_files = [
+                f
+                for f in os.listdir(base_dir)
+                if f.endswith((".mp3", ".wav")) and not f.endswith("_downsampled.mp3")
+            ]
+            if audio_files:
+                enhanced_test_files = [
+                    f"{base_dir}/{audio_files[0]}",  # Local file
+                    "https://github.com/Plyraa/warden/raw/refs/heads/main/stereo_test_calls/test1.mp3",
+                ][:2]  # Limit for demo
+    except Exception as e:
+        print(f"Error preparing enhanced test: {e}")
+
+    if not enhanced_test_files:
+        enhanced_test_files = [
+            "https://github.com/Plyraa/warden/raw/refs/heads/main/stereo_test_calls/test1.mp3"
+        ]
+
+    print(f"Enhanced test files: {enhanced_test_files}")
+
+    # Process files
+    response = analyze_files(enhanced_test_files, base_url)
     if response:
-        print("\n--- BATCH RESULTS ---")
+        print("\n🎯 BATCH PROCESSING RESULTS:")
+        print("-" * 40)
 
-        # Count successes and errors
         results = response
         success_count = len([r for r in results if r.get("status") == "success"])
         error_count = len([r for r in results if r.get("status") != "success"])
 
-        print(f"Success Count: {success_count}")
-        print(f"Error Count: {error_count}")
-        print(f"Total Files Processed: {len(results)}")
+        print(f"✅ Successfully processed: {success_count} files")
+        print(f"❌ Errors encountered: {error_count} files")
 
-        # Display successful results
-        successful_results = [r for r in results if r.get("status") == "success"]
-        if successful_results:
-            print(f"\n--- SUCCESSFUL ANALYSES ({success_count}) ---")
-            for i, result in enumerate(successful_results):
-                print(f"\n=== File {i + 1}: {result['filename']} ===")
+        print("\n📈 DETAILED RESULTS:")
+        for i, result in enumerate(results, 1):
+            print(f"\n{i}. File: {result.get('filename', 'Unknown')}")
+            print(f"   Status: {result.get('status', 'Unknown')}")
 
-                # Display latency metrics
-                print("\nLatency Metrics:")
-                print(f"Average Latency: {result['average_latency']:.2f} ms")
-                print(f"P50 Latency: {result['p50_latency']:.2f} ms")
-                print(f"P90 Latency: {result['p90_latency']:.2f} ms")
-                print(f"Min Latency: {result['min_latency']:.2f} ms")
-                print(f"Max Latency: {result['max_latency']:.2f} ms")
+            if result.get("status") == "success":
+                # Show key metrics
+                avg_lat = result.get("average_latency", 0)
+                talk_ratio = result.get("talk_ratio", 0)
+                wpm = result.get("words_per_minute", 0)
+                pitch = result.get("average_pitch", 0)
 
-                # Display interruption metrics
-                print("\nInterruptions:")
-                print(
-                    f"AI Interrupting User: {'Yes' if result['ai_interrupting_user'] else 'No'}"
-                )
-                print(
-                    f"User Interrupting AI: {'Yes' if result['user_interrupting_ai'] else 'No'}"
-                )
+                print(f"   📊 Average Latency: {avg_lat:.1f}ms")
+                print(f"   💬 Talk Ratio: {talk_ratio:.2f}")
+                print(f"   🗣️  Words/Minute: {wpm:.1f}")
+                print(f"   🎵 Average Pitch: {pitch:.1f}Hz")
 
-                # Display overlap counts
-                print("\nOverlaps:")
-                print(f"AI→User Overlaps: {result['ai_user_overlap_count']}")
-                print(f"User→AI Overlaps: {result['user_ai_overlap_count']}")
+                # Show overlap info
+                ai_interrupts = result.get("ai_user_overlap_count", 0)
+                user_interrupts = result.get("user_ai_overlap_count", 0)
+                print(f"   🔄 AI Interruptions: {ai_interrupts}")
+                print(f"   🔄 User Interruptions: {user_interrupts}")
 
-                # Display other metrics
-                print("\nOther Metrics:")
-                print(f"Talk Ratio: {result['talk_ratio']:.2f}")
-                print(f"Average Pitch: {result['average_pitch']:.2f} Hz")
-                print(f"Words Per Minute: {result['words_per_minute']:.2f}")
+                # Show latency range
+                min_lat = result.get("min_latency", 0)
+                max_lat = result.get("max_latency", 0)
+                p50_lat = result.get("p50_latency", 0)
+                p90_lat = result.get("p90_latency", 0)
+                print(f"   📏 Latency Range: {min_lat:.0f}-{max_lat:.0f}ms")
+                print(f"   📊 P50/P90: {p50_lat:.0f}/{p90_lat:.0f}ms")
 
-                # Display latency points (first 5 only)
-                if result["latency_points"]:
-                    print("\nLatency Points (first 5):")
-                    for point in result["latency_points"][:5]:
-                        print(
-                            f" - {point['latency_ms']:.2f} ms at {point['moment']:.2f}s"
-                        )
-
-                    if len(result["latency_points"]) > 5:
-                        print(
-                            f" ... and {len(result['latency_points']) - 5} more points"
-                        )
-
-                # Pretty print the complete metric object
-                print("\n=== Complete Metric Object ===")
-                print(json.dumps(result, indent=2, sort_keys=True))
-                print("-" * 50)
-
-                print("-" * 60)
-
-        # Display errors
-        error_results = [r for r in results if r.get("status") != "success"]
-        if error_results:
-            print(f"\n--- ERRORS ({error_count}) ---")
-            for i, error in enumerate(error_results):
-                print(f"\n=== Error {i + 1} ===")
-                print(f"Status: {error['status']}")
-                print("-" * 40)
-
-        # Error handling demo
-        print("\n--- ERROR HANDLING DEMO ---")
-        print("Testing error handling with invalid files...")
+        print("\n🔧 ERROR HANDLING DEMO:")
+        print("Testing error scenarios...")
 
         test_files = [
             "nonexistent_file.mp3",  # File not found

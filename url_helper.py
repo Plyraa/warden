@@ -110,8 +110,9 @@ class AudioDownloader:
                 filename = unquote(filename)  # URL decode
                 # Extract only the basename to avoid path inclusion
                 filename = os.path.basename(filename)
+                raw_filename = cd_match.group(1).strip('"\'')
                 print(
-                    f"Raw filename from Content-Disposition: {cd_match.group(1).strip('"\'')}"
+                    f"Raw filename from Content-Disposition: {raw_filename}"
                 )
                 print(f"After processing: {filename}")
             else:

@@ -498,19 +498,3 @@ async def analyze_batch_stream(audio_files: AudioFileList):
         media_type="application/x-ndjson",
         headers={"Cache-Control": "no-cache"},
     )
-
-
-def start_web_app(host="127.0.0.1", port=5000, threads=4):
-    """Start web app with Waitress WSGI server"""
-    from warden import run_flask_app
-
-    # Run the web application with Waitress
-    run_flask_app(host, port, threads)
-
-
-if __name__ == "__main__":
-    # For backward compatibility, import and use warden's functionality
-    from warden import run_combined
-
-    # Start both FastAPI and Flask web UI
-    run_combined(host="127.0.0.1", api_port=8000, web_port=5000, threads=4)

@@ -7,36 +7,24 @@ import librosa
 import soundfile as sf
 from pydub import AudioSegment
 import traceback
+from pathlib import Path
 import torch
 import time
+import constants
 from typing import Dict, Any, List, Tuple, Optional
-from config import Config
-
+from scipy.signal import find_peaks
 
 class AudioProcessor:
-    def __init__(self, input_dir="stereo_test_calls", output_dir="sampled_test_calls"):
-        """Initialize the audio processor
-        
-        Args:
-            input_dir: Directory containing input audio files
-            output_dir: Directory to save processed audio files
-        """
-        self.input_dir = input_dir
-        self.output_dir = output_dir
-        self.sampling_rate = Config.SAMPLE_RATE  # Use config setting
-        
-        # Silero VAD model - will be lazy loaded when needed
+    def __init__(self, audio_dir: Path):
+        self.sampling_rate = 16000
         self.vad_model = None
         self.get_speech_timestamps = None
-        
-        # Ensure temp directory exists
-        Config.ensure_temp_dir()
+        self.audio_dir = audio_dir
 
     def get_vad_model(self):
         """Get Silero VAD model and utility functions"""
         if self.vad_model is None:
             try:
-                print("Loading Silero VAD model...")
                 # Load model and utilities from torch hub
                 model, utils = torch.hub.load(
                     repo_or_dir='snakers4/silero-vad',
@@ -55,46 +43,25 @@ class AudioProcessor:
         else:
             return self.vad_model, self.get_speech_timestamps
 
-    def downsample_audio(self, input_file, target_sr=16000):
+    def downsample_audio(self, input_path, target_sr=16000):
         """Downsample stereo audio file to target sample rate and return left and right channels"""
         # Check if input_file is an absolute path
-        if os.path.isabs(input_file) and os.path.exists(input_file):
-            input_path = input_file
-            base_filename = os.path.basename(input_file)
-        else:
-            # Try relative to input directory
-            input_path = os.path.join(self.input_dir, input_file)
-            base_filename = input_file
+
+        if not os.path.exists(input_path):
+            raise FileNotFoundError(f"Input file not found: {input_path}")
+
+        base_filename = os.path.basename(input_path)
 
         output_filename = (
             os.path.splitext(base_filename)[0] + "_downsampled" + os.path.splitext(base_filename)[1]
         )
-        output_path = os.path.join(Config.TEMP_DIR, output_filename)
+        output_path = os.path.join(self.audio_dir, output_filename)
 
-        # Verify input file exists
-        if not os.path.exists(input_path):
-            print(f"ERROR: Input file does not exist: {input_path}")
-            # Try alternative paths
-            alt_paths = [
-                input_file,
-                os.path.abspath(input_file),
-                os.path.join(os.getcwd(), input_file),
-            ]
-
-            for alt_path in alt_paths:
-                if os.path.exists(alt_path):
-                    print(f"Found file at alternative path: {alt_path}")
-                    input_path = alt_path
-                    break
-            else:
-                raise FileNotFoundError(f"Input file not found: {input_file}")
-
-        # Check if downsampled file already exists - always overwrite for fresh processing
         if os.path.exists(output_path):
             print(f"Removing existing downsampled file for fresh processing: {output_path}")
             os.remove(output_path)
 
-        file_extension = os.path.splitext(input_file)[1].lower()
+        file_extension = os.path.splitext(input_path)[1].lower()
         
         try:
             if file_extension == ".mp3":
@@ -447,7 +414,7 @@ class AudioProcessor:
         energy = librosa.feature.rms(y=agent_speech, frame_length=frame_length, hop_length=hop_length)[0]
 
         # Find peaks in energy (syllables)
-        from scipy.signal import find_peaks
+        
         peaks, _ = find_peaks(energy, distance=5, prominence=0.01)
 
         # Estimate words

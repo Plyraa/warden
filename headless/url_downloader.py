@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 from pathlib import Path
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from config import Config
+import tempfile
 
 logger = logging.getLogger(__name__)
 
@@ -22,15 +22,9 @@ class AudioDownloadError(Exception):
 class URLDownloader:
     """Robust audio file downloader with retry logic and comprehensive validation"""
     
-    def __init__(self, download_dir: str = None, max_file_size: int = None):
-        self.download_dir = Path(download_dir) if download_dir else Config.TEMP_DIR
-        self.max_file_size = max_file_size or Config.get_max_file_size_bytes()
+    def __init__(self, audio_dir: Path = None):
+        self.audio_dir = audio_dir
         self.session = self._create_session()
-        
-        # Create temp directory if it doesn't exist
-        self.download_dir.mkdir(parents=True, exist_ok=True)
-
-        # Supported audio formats
         self.supported_extensions = {
             ".mp3", ".wav", ".m4a", ".flac", ".ogg", ".aac", ".wma"
         }
@@ -90,7 +84,7 @@ class URLDownloader:
             if not original_name.lower().endswith(('.mp3', '.wav', '.m4a', '.flac', '.ogg', '.aac')):
                 original_name += '.mp3'
                 
-            local_path = self.download_dir / original_name
+            local_path = self.audio_dir / original_name
             
             logger.info(f"Downloading from URL: {url} -> {local_path}")
             
@@ -98,11 +92,7 @@ class URLDownloader:
             try:
                 head_response = self.session.head(url, timeout=30)
                 head_response.raise_for_status()
-                
-                content_length = head_response.headers.get('content-length')
-                if content_length and int(content_length) > self.max_file_size:
-                    raise AudioDownloadError(f"File too large: {content_length} bytes (max: {self.max_file_size})")
-                    
+                                    
             except requests.exceptions.RequestException:
                 # HEAD request failed, continue with GET
                 pass
@@ -117,10 +107,6 @@ class URLDownloader:
                 for chunk in response.iter_content(chunk_size=8192):
                     if chunk:
                         total_size += len(chunk)
-                        if total_size > self.max_file_size:
-                            f.close()
-                            local_path.unlink()  # Delete partial file
-                            raise AudioDownloadError(f"File too large during download: {total_size} bytes")
                         f.write(chunk)
             
             logger.info(f"Successfully downloaded {total_size} bytes to {local_path}")
@@ -139,12 +125,25 @@ class URLDownloader:
         except Exception:
             return False
 
-
-    def cleanup_temp_file(self, file_path: str):
-        """Clean up temporary downloaded file"""
+    def cleanup_temp_dir(self):
+        """Remove all temporary files under the specified directory (defaults to audio_dir)."""
+        path = Path(self.audio_dir)
         try:
-            if os.path.exists(file_path) and str(Config.TEMP_DIR) in file_path:
-                os.remove(file_path)
-                logger.info(f"Cleaned up temp file: {file_path}")
+            if not path.exists() or not path.is_dir():
+                logger.warning(f"Cleanup skipped, directory does not exist: {path}")
+                return
+
+            deleted_files = 0
+            for item in path.iterdir():
+                if item.is_file():
+                    try:
+                        item.unlink()
+                        deleted_files += 1
+                    except Exception as e:
+                        logger.warning(f"Failed to delete temp file {item}: {e}")
+
+            logger.info(
+                f"Cleaned up {deleted_files} temp file{'s' if deleted_files != 1 else ''} in directory: {path}"
+            )
         except Exception as e:
-            logger.warning(f"Failed to cleanup temp file {file_path}: {e}")
+            logger.warning(f"Failed to cleanup directory {path}: {e}")

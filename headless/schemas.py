@@ -8,7 +8,15 @@ from pydantic import BaseModel
 class AudioFileList(BaseModel):
     """Model for list of audio files to analyze in batch mode"""
     file_paths: List[str]  # Can be local file paths or URLs
-
+    class Config:
+        schema_extra = {
+            "example": {
+                "file_paths": [
+                    "https://github.com/Plyraa/warden/raw/refs/heads/main/stereo_test_calls/66057328368247d623d0b87.67876133.mp3",
+                    "https://github.com/Plyraa/warden/raw/refs/heads/main/stereo_test_calls/17457745626800ad609b0bd7.58327851.mp3"
+                ]
+            }
+        }
 
 class MetricsResponse(BaseModel):
     """Model for the metrics response"""
@@ -30,6 +38,9 @@ class MetricsResponse(BaseModel):
     average_pitch: float = 0.0
     words_per_minute: float = 0.0
 
+class BatchMetricsResponse(BaseModel):
+    """Model for the batch metrics response"""
+    results: List[MetricsResponse]
 
 class HealthResponse(BaseModel):
     """Health check response model"""

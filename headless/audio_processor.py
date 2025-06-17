@@ -258,7 +258,13 @@ class AudioProcessor:
         if not latencies:
             return self._create_empty_latency_stats()
         
-        latencies_array = np.array(latencies)
+        # Filter out latencies below 1.5 seconds
+        filtered_latencies = [lat for lat in latencies if lat >= 1.5]
+        
+        if not filtered_latencies:
+            return self._create_empty_latency_stats()
+        
+        latencies_array = np.array(filtered_latencies)
         return {
             "avg_latency": float(np.mean(latencies_array)),
             "p50_latency": float(np.percentile(latencies_array, 50)),

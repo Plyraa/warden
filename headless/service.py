@@ -94,7 +94,7 @@ class VoiceAgentEvaluatorService:
 
                             latency_points.append({
                                 "latency_ms": latency_ms,
-                                "moment": point["to_turn_start"],
+                                "moment": point["from_turn_end"]  # Fixed: Mark start of latency period
                             })
 
                 # Extract metrics
@@ -215,7 +215,7 @@ class VoiceAgentEvaluatorService:
 
                                 latency_points.append({
                                     "latency_ms": latency_ms,
-                                    "moment": point["to_turn_start"],
+                                    "moment": point["from_turn_end"],  # Fixed: Mark start of latency period
                                 })
 
                     # Extract metrics

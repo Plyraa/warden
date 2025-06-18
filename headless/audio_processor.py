@@ -185,7 +185,7 @@ class AudioProcessor:
                 print(f"Warning: Skipping invalid {speaker_type} segment: {seg}")
         return sorted(normalized, key=lambda x: x["start"])
 
-    def _create_overlap_aware_timeline(self, user_segments, agent_segments, max_gap=2.0):
+    def _create_overlap_aware_timeline(self, user_segments, agent_segments):
         """Create timeline that properly handles overlaps"""
         all_events = []
         
@@ -230,26 +230,76 @@ class AudioProcessor:
         return conversation_turns
 
     def _calculate_turn_latencies(self, conversation_turns):
-        """Calculate latencies between turns"""
+        """Calculate latencies between conversational turns, looking back to find
+        the actual end of the previous speaker's conversational segment."""
         latencies = []
         latency_details = []
         overlap_count = 0
+        processed_transitions = set()  # Track processed transitions to avoid duplicates
         
-        for i in range(len(conversation_turns) - 1):
+        # Find speaker transitions and calculate true conversational latencies
+        i = 0
+        while i < len(conversation_turns):
             current_turn = conversation_turns[i]
-            next_turn = conversation_turns[i + 1]
             
-            if current_turn["speaker"] == "user" and next_turn["speaker"] == "ai_agent":
-                latency_seconds = next_turn["start"] - current_turn["end"]
-                latencies.append(latency_seconds)
+            # Look ahead to find the next different speaker
+            next_different_speaker_turn = None
+            j = i + 1
+            while j < len(conversation_turns):
+                candidate_turn = conversation_turns[j]
                 
-                latency_details.append({
-                    "interaction_type": "user_to_agent",
-                    "from_turn_end": current_turn["end"],
-                    "to_turn_start": next_turn["start"],
-                    "latency_seconds": latency_seconds,
-                    "latency_ms": latency_seconds * 1000
-                })
+                # Found a different speaker
+                if candidate_turn["speaker"] != current_turn["speaker"]:
+                    next_different_speaker_turn = candidate_turn
+                    break
+                    
+                j += 1
+            
+            # If we found a speaker transition, calculate latency
+            if next_different_speaker_turn:
+                # Find the FIRST segment of the current speaker's conversational turn
+                # Look backwards to find where this speaker's turn started
+                first_segment_end = current_turn["end"]
+                first_segment_start = current_turn["start"]
+                k = i
+                while k >= 0:
+                    check_turn = conversation_turns[k]
+                    if check_turn["speaker"] == current_turn["speaker"]:
+                        first_segment_end = check_turn["end"]
+                        first_segment_start = check_turn["start"]
+                        # Continue looking backwards to find the very first segment
+                        if k > 0:
+                            prev_check = conversation_turns[k-1]
+                            # If previous turn is different speaker, we found the start
+                            if prev_check["speaker"] != current_turn["speaker"]:
+                                break
+                    else:
+                        # Found a different speaker, stop looking
+                        break
+                    k -= 1
+                
+                # Create a unique key for this transition to avoid duplicates
+                transition_key = (first_segment_start, next_different_speaker_turn["start"])
+                
+                # Only process if we haven't seen this exact transition before
+                if transition_key not in processed_transitions:
+                    processed_transitions.add(transition_key)
+                    
+                    # Only calculate user_to_agent latencies (same as original logic)
+                    if current_turn["speaker"] == "user" and next_different_speaker_turn["speaker"] == "ai_agent":
+                        # Calculate latency from first segment end of user to start of agent
+                        latency_seconds = next_different_speaker_turn["start"] - first_segment_end
+                        latencies.append(latency_seconds)
+                        
+                        latency_details.append({
+                            "interaction_type": "user_to_agent",
+                            "from_turn_end": first_segment_end,
+                            "to_turn_start": next_different_speaker_turn["start"],
+                            "latency_seconds": latency_seconds,
+                            "latency_ms": latency_seconds * 1000
+                        })
+            
+            i += 1
         
         return latencies, latency_details, {"overlap_count": overlap_count}
 

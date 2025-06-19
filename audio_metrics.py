@@ -830,7 +830,7 @@ class AudioMetricsCalculator:
 
         return conversation_turns
 
-    def _merge_nearby_segments(self, segments, max_gap=2.0):
+    def _merge_nearby_segments(self, segments, max_gap=1.5):
         """
         Merge segments from the same speaker that are close in time.
         This is more aggressive about merging to create cleaner conversation turns.
@@ -942,45 +942,44 @@ class AudioMetricsCalculator:
                 if transition_key not in processed_transitions:
                     processed_transitions.add(transition_key)
                     
-                    # Calculate latency from first segment end of previous speaker to start of next speaker
-                    latency_seconds = next_different_speaker_turn["start"] - first_segment_end
-
-                    # Debug output for troubleshooting
-                    print(f"DEBUG: Latency calculation - From {current_turn['speaker']} FIRST segment end at {first_segment_end:.1f} to {next_different_speaker_turn['speaker']} start at {next_different_speaker_turn['start']:.1f} = {latency_seconds:.1f}s")
-
-                    # Categorize the interaction type
-                    interaction_type = "unknown"
+                    # Only calculate user_to_agent latencies (user speaks, waits for agent)
                     if current_turn["speaker"] == "user" and next_different_speaker_turn["speaker"] == "ai_agent":
+                        # Calculate latency from first segment end of user to start of agent
+                        latency_seconds = next_different_speaker_turn["start"] - first_segment_end
+
+                        # Debug output for troubleshooting
+                        print(f"DEBUG: Latency calculation - From {current_turn['speaker']} FIRST segment end at {first_segment_end:.1f} to {next_different_speaker_turn['speaker']} start at {next_different_speaker_turn['start']:.1f} = {latency_seconds:.1f}s")
+
                         interaction_type = "user_to_agent"
                         successful_handoffs += 1
-                    elif current_turn["speaker"] == "ai_agent" and next_different_speaker_turn["speaker"] == "user":
-                        interaction_type = "agent_to_user"
 
+                        # Only include positive latencies (actual response delays)
+                        if latency_seconds > 0.001:  # Small threshold for floating point precision
+                            latencies.append(latency_seconds)
+                            latency_details.append(
+                                {
+                                    "latency_seconds": latency_seconds,
+                                    "latency_ms": latency_seconds * 1000,
+                                    "interaction_type": interaction_type,
+                                    "from_speaker": current_turn["speaker"],
+                                    "to_speaker": next_different_speaker_turn["speaker"],
+                                    "from_turn_end": first_segment_end,
+                                    "to_turn_start": next_different_speaker_turn["start"],
+                                    "from_turn_details": current_turn,
+                                    "to_turn_details": next_different_speaker_turn,
+                                    "rating": self.rate_latency(latency_seconds),
+                                }
+                            )
+                        elif latency_seconds < -0.1:  # Significant overlap/interruption
+                            # This would be AI interrupting user
+                            ai_interruptions += 1
+                    
+                    # Handle agent_to_user transitions for interruption counting only
+                    elif current_turn["speaker"] == "ai_agent" and next_different_speaker_turn["speaker"] == "user":
+                        latency_seconds = next_different_speaker_turn["start"] - first_segment_end
                         # Check if this might be an interruption (negative or very small latency)
                         if latency_seconds < 0.5:
                             user_interruptions += 1
-                            interaction_type += "_interruption"
-
-                    # Only include positive latencies (actual response delays)
-                    if latency_seconds > 0.001:  # Small threshold for floating point precision
-                        latencies.append(latency_seconds)
-                        latency_details.append(
-                            {
-                                "latency_seconds": latency_seconds,
-                                "latency_ms": latency_seconds * 1000,
-                                "interaction_type": interaction_type,
-                                "from_speaker": current_turn["speaker"],
-                                "to_speaker": next_different_speaker_turn["speaker"],
-                                "from_turn_end": first_segment_end,
-                                "to_turn_start": next_different_speaker_turn["start"],
-                                "from_turn_details": current_turn,
-                                "to_turn_details": next_different_speaker_turn,
-                                "rating": self.rate_latency(latency_seconds),
-                            }
-                        )
-                    elif latency_seconds < -0.1:  # Significant overlap/interruption
-                        if current_turn["speaker"] == "user":
-                            ai_interruptions += 1
             
             i += 1
 
@@ -993,13 +992,13 @@ class AudioMetricsCalculator:
 
         print(f"Calculated {len(latencies)} turn-taking latencies using improved method.")
         print(f"Overlap statistics: {overlap_stats}")
-
         return latencies, latency_details, overlap_stats
 
     def _generate_latency_stats(self, latencies):
         """Generate statistical summary of latencies."""
 
         latencies = [latency for latency in latencies if latency > 1.5]
+        print(latencies)
         if not latencies:
             return {
                 "avg_latency": 0,
@@ -1015,11 +1014,11 @@ class AudioMetricsCalculator:
             "min_latency": min(latencies),
             "max_latency": max(latencies),
             "p10_latency": float(np.percentile(latencies, 10))
-            if len(latencies) >= 10
+            if len(latencies) >= 4
             else min(latencies),
             "p50_latency": float(np.percentile(latencies, 50)),
             "p90_latency": float(np.percentile(latencies, 90))
-            if len(latencies) >= 10
+            if len(latencies) >= 4
             else max(latencies),
         }
 

@@ -7,36 +7,24 @@ import librosa
 import soundfile as sf
 from pydub import AudioSegment
 import traceback
+from pathlib import Path
 import torch
 import time
+import constants
 from typing import Dict, Any, List, Tuple, Optional
-from config import Config
-
+from scipy.signal import find_peaks
 
 class AudioProcessor:
-    def __init__(self, input_dir="stereo_test_calls", output_dir="sampled_test_calls"):
-        """Initialize the audio processor
-        
-        Args:
-            input_dir: Directory containing input audio files
-            output_dir: Directory to save processed audio files
-        """
-        self.input_dir = input_dir
-        self.output_dir = output_dir
-        self.sampling_rate = Config.SAMPLE_RATE  # Use config setting
-        
-        # Silero VAD model - will be lazy loaded when needed
+    def __init__(self, audio_dir: Path):
+        self.sampling_rate = 16000
         self.vad_model = None
         self.get_speech_timestamps = None
-        
-        # Ensure temp directory exists
-        Config.ensure_temp_dir()
+        self.audio_dir = audio_dir
 
     def get_vad_model(self):
         """Get Silero VAD model and utility functions"""
         if self.vad_model is None:
             try:
-                print("Loading Silero VAD model...")
                 # Load model and utilities from torch hub
                 model, utils = torch.hub.load(
                     repo_or_dir='snakers4/silero-vad',
@@ -55,46 +43,25 @@ class AudioProcessor:
         else:
             return self.vad_model, self.get_speech_timestamps
 
-    def downsample_audio(self, input_file, target_sr=16000):
+    def downsample_audio(self, input_path, target_sr=16000):
         """Downsample stereo audio file to target sample rate and return left and right channels"""
         # Check if input_file is an absolute path
-        if os.path.isabs(input_file) and os.path.exists(input_file):
-            input_path = input_file
-            base_filename = os.path.basename(input_file)
-        else:
-            # Try relative to input directory
-            input_path = os.path.join(self.input_dir, input_file)
-            base_filename = input_file
+
+        if not os.path.exists(input_path):
+            raise FileNotFoundError(f"Input file not found: {input_path}")
+
+        base_filename = os.path.basename(input_path)
 
         output_filename = (
             os.path.splitext(base_filename)[0] + "_downsampled" + os.path.splitext(base_filename)[1]
         )
-        output_path = os.path.join(Config.TEMP_DIR, output_filename)
+        output_path = os.path.join(self.audio_dir, output_filename)
 
-        # Verify input file exists
-        if not os.path.exists(input_path):
-            print(f"ERROR: Input file does not exist: {input_path}")
-            # Try alternative paths
-            alt_paths = [
-                input_file,
-                os.path.abspath(input_file),
-                os.path.join(os.getcwd(), input_file),
-            ]
-
-            for alt_path in alt_paths:
-                if os.path.exists(alt_path):
-                    print(f"Found file at alternative path: {alt_path}")
-                    input_path = alt_path
-                    break
-            else:
-                raise FileNotFoundError(f"Input file not found: {input_file}")
-
-        # Check if downsampled file already exists - always overwrite for fresh processing
         if os.path.exists(output_path):
             print(f"Removing existing downsampled file for fresh processing: {output_path}")
             os.remove(output_path)
 
-        file_extension = os.path.splitext(input_file)[1].lower()
+        file_extension = os.path.splitext(input_path)[1].lower()
         
         try:
             if file_extension == ".mp3":
@@ -218,7 +185,7 @@ class AudioProcessor:
                 print(f"Warning: Skipping invalid {speaker_type} segment: {seg}")
         return sorted(normalized, key=lambda x: x["start"])
 
-    def _create_overlap_aware_timeline(self, user_segments, agent_segments, max_gap=2.0):
+    def _create_overlap_aware_timeline(self, user_segments, agent_segments):
         """Create timeline that properly handles overlaps"""
         all_events = []
         
@@ -263,26 +230,76 @@ class AudioProcessor:
         return conversation_turns
 
     def _calculate_turn_latencies(self, conversation_turns):
-        """Calculate latencies between turns"""
+        """Calculate latencies between conversational turns, looking back to find
+        the actual end of the previous speaker's conversational segment."""
         latencies = []
         latency_details = []
         overlap_count = 0
+        processed_transitions = set()  # Track processed transitions to avoid duplicates
         
-        for i in range(len(conversation_turns) - 1):
+        # Find speaker transitions and calculate true conversational latencies
+        i = 0
+        while i < len(conversation_turns):
             current_turn = conversation_turns[i]
-            next_turn = conversation_turns[i + 1]
             
-            if current_turn["speaker"] == "user" and next_turn["speaker"] == "ai_agent":
-                latency_seconds = next_turn["start"] - current_turn["end"]
-                latencies.append(latency_seconds)
+            # Look ahead to find the next different speaker
+            next_different_speaker_turn = None
+            j = i + 1
+            while j < len(conversation_turns):
+                candidate_turn = conversation_turns[j]
                 
-                latency_details.append({
-                    "interaction_type": "user_to_agent",
-                    "from_turn_end": current_turn["end"],
-                    "to_turn_start": next_turn["start"],
-                    "latency_seconds": latency_seconds,
-                    "latency_ms": latency_seconds * 1000
-                })
+                # Found a different speaker
+                if candidate_turn["speaker"] != current_turn["speaker"]:
+                    next_different_speaker_turn = candidate_turn
+                    break
+                    
+                j += 1
+            
+            # If we found a speaker transition, calculate latency
+            if next_different_speaker_turn:
+                # Find the FIRST segment of the current speaker's conversational turn
+                # Look backwards to find where this speaker's turn started
+                first_segment_end = current_turn["end"]
+                first_segment_start = current_turn["start"]
+                k = i
+                while k >= 0:
+                    check_turn = conversation_turns[k]
+                    if check_turn["speaker"] == current_turn["speaker"]:
+                        first_segment_end = check_turn["end"]
+                        first_segment_start = check_turn["start"]
+                        # Continue looking backwards to find the very first segment
+                        if k > 0:
+                            prev_check = conversation_turns[k-1]
+                            # If previous turn is different speaker, we found the start
+                            if prev_check["speaker"] != current_turn["speaker"]:
+                                break
+                    else:
+                        # Found a different speaker, stop looking
+                        break
+                    k -= 1
+                
+                # Create a unique key for this transition to avoid duplicates
+                transition_key = (first_segment_start, next_different_speaker_turn["start"])
+                
+                # Only process if we haven't seen this exact transition before
+                if transition_key not in processed_transitions:
+                    processed_transitions.add(transition_key)
+                    
+                    # Only calculate user_to_agent latencies (same as original logic)
+                    if current_turn["speaker"] == "user" and next_different_speaker_turn["speaker"] == "ai_agent":
+                        # Calculate latency from first segment end of user to start of agent
+                        latency_seconds = next_different_speaker_turn["start"] - first_segment_end
+                        latencies.append(latency_seconds)
+                        
+                        latency_details.append({
+                            "interaction_type": "user_to_agent",
+                            "from_turn_end": first_segment_end,
+                            "to_turn_start": next_different_speaker_turn["start"],
+                            "latency_seconds": latency_seconds,
+                            "latency_ms": latency_seconds * 1000
+                        })
+            
+            i += 1
         
         return latencies, latency_details, {"overlap_count": overlap_count}
 
@@ -291,7 +308,13 @@ class AudioProcessor:
         if not latencies:
             return self._create_empty_latency_stats()
         
-        latencies_array = np.array(latencies)
+        # Filter out latencies below 1.5 seconds
+        filtered_latencies = [lat for lat in latencies if lat >= 1.5]
+        
+        if not filtered_latencies:
+            return self._create_empty_latency_stats()
+        
+        latencies_array = np.array(filtered_latencies)
         return {
             "avg_latency": float(np.mean(latencies_array)),
             "p50_latency": float(np.percentile(latencies_array, 50)),
@@ -447,7 +470,7 @@ class AudioProcessor:
         energy = librosa.feature.rms(y=agent_speech, frame_length=frame_length, hop_length=hop_length)[0]
 
         # Find peaks in energy (syllables)
-        from scipy.signal import find_peaks
+        
         peaks, _ = find_peaks(energy, distance=5, prominence=0.01)
 
         # Estimate words

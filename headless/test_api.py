@@ -12,14 +12,14 @@ import os
 from pathlib import Path
 
 # API Configuration
-API_BASE = "http://localhost:8000"
+API_BASE = "http://localhost:8030"
 TEST_FILES_DIR = r"C:\Users\Plyra\Desktop\Plyra\jotform\warden\stereo_test_calls"
 
 def test_health():
     """Test health endpoint"""
     print("🔍 Testing Health Endpoint...")
     try:
-        response = requests.get(f"{API_BASE}/health")
+        response = requests.get(f"{API_BASE}/isAlive")
         print(f"Status Code: {response.status_code}")
         print(f"Response: {response.json()}")
         return response.status_code == 200
@@ -33,8 +33,8 @@ def test_batch_processing():
     
     # Test with full paths to local files
     test_files = [
-        os.path.join(TEST_FILES_DIR, "test1.mp3"),
-        os.path.join(TEST_FILES_DIR, "243801406824559add7684.37683750.mp3")
+        os.path.join(TEST_FILES_DIR, "18122608606843567790f6a3.38069641.mp3"),
+        os.path.join(TEST_FILES_DIR, "207978285268425581ee85e6.86799284.mp3")
     ]
     
     payload = {
@@ -44,7 +44,6 @@ def test_batch_processing():
     try:
         print(f"Sending request with files: {[os.path.basename(f) for f in test_files]}")
         start_time = time.time()
-        
         response = requests.post(
             f"{API_BASE}/batch",
             json=payload,
@@ -58,7 +57,8 @@ def test_batch_processing():
         print(f"Processing Time: {processing_time:.2f} seconds")
         
         if response.status_code == 200:
-            results = response.json()
+            response_data = response.json()
+            results = response_data.get('results', [])
             print(f"✅ Successfully processed {len(results)} files")
             
             for i, result in enumerate(results):
@@ -178,13 +178,13 @@ def test_error_handling():
         response = requests.post(
             f"{API_BASE}/batch",
             json=payload,
-            headers={"Content-Type": "application/json"}
-        )
+            headers={"Content-Type": "application/json"}        )
         
         print(f"Status Code: {response.status_code}")
         
         if response.status_code == 200:
-            results = response.json()
+            response_data = response.json()
+            results = response_data.get('results', [])
             print(f"Processed {len(results)} files (with errors expected)")
             
             for result in results:

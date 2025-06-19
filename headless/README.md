@@ -98,7 +98,7 @@ Each processed file returns:
 | `filename` | Extracted filename |
 | `status` | "success" or "error" |
 | `error_message` | Error details (null on success) |
-| `latency_points` | Individual latency measurements with timestamps |
+| `latency_points` | Individual latency measurements with timestamps where latency period begins (user ends talking) |
 | `average_latency` | Mean response latency (ms) |
 | `p50_latency` / `p90_latency` | 50th/90th percentile latencies (ms) |
 | `min_latency` / `max_latency` | Minimum/maximum latencies (ms) |

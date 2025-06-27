@@ -1,4 +1,4 @@
-fastapi==0.70.0
+fastapi==0.115.14
 uvicorn==0.19.0
 librosa==0.9.2
 torch==2.0.0
@@ -9,6 +9,11 @@ numpy>=1.23.0
 scipy==1.10.1
 requests==2.31.0
 urllib3==2.2.1
-pydantic==1.8.2
+#pydantic causes internal errors when there is dependency conflict
+#elevenlabs depends on it
+pydantic==2.11.7
 loguru==0.5.3
 singleton-decorator==1.0.0
+openai
+elevenlabs
+python-dotenv

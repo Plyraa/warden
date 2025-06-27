@@ -1,3 +1,2 @@
 csv_outputs/
-data_utils/
-batch_csv_logger.py
+data_utils/__init__.py

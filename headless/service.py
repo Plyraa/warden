@@ -15,6 +15,7 @@ from fastapi.responses import StreamingResponse
 from schemas import AudioFileList, MetricsResponse, HealthResponse, BatchMetricsResponse
 from audio_processor import AudioProcessor
 from url_downloader import URLDownloader
+from llm_evaluator import LlmEvaluator, LlmEvaluationResult
 
 sys.path.append(os.getcwd() + "/..")
 from data_utils.logger import init_logging
@@ -35,14 +36,26 @@ class VoiceAgentEvaluatorService:
         self.audio_dir.mkdir(parents=True, exist_ok=True)
         self.processor = AudioProcessor(audio_dir=self.audio_dir)
         self.downloader = URLDownloader(audio_dir=self.audio_dir)
+        
+        # Initialize LLM evaluator with error handling
+        try:
+            self.llm_evaluator = LlmEvaluator()
+            logger.info("✅ LLM Evaluator initialized successfully")
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize LLM Evaluator: {e}")
+            self.llm_evaluator = None
 
     async def analyze_batch(self, audio_files: AudioFileList):
         print(audio_files)
         results = []
         downloaded_files: list[str] = []  # Track any files pulled from remote URLs
-        logger.info(f"Received batch request for {len(audio_files.file_paths)} files")
+        logger.info(f"Received batch request for {len(audio_files.files)} files")
 
-        for path in audio_files.file_paths:
+        loop = asyncio.get_event_loop()
+
+        for audio_file in audio_files.files:
+            path = audio_file.path
+            agent_id = audio_file.agent_id
             logger.info(f"Processing: {path}")
             
             try:
@@ -81,7 +94,21 @@ class VoiceAgentEvaluatorService:
                 filename = os.path.basename(local_file_path)
                 logger.info(f"Processing file: {filename}")
                 
-                metrics = self.processor.process_file(local_file_path)
+                metrics = await loop.run_in_executor(None, self.processor.process_file, local_file_path)
+
+                # Run LLM evaluation
+                llm_evaluation = None
+                if self.llm_evaluator is None:
+                    logger.warning(f"LLM Evaluator not available, skipping evaluation for {filename}")
+                else:
+                    try:
+                        logger.info(f"Starting LLM evaluation for {filename} with agent_id {agent_id}")
+                        llm_evaluation = await loop.run_in_executor(None, self.llm_evaluator.run_evaluation, local_file_path, agent_id)
+                        logger.info(f"LLM evaluation completed successfully for {filename}")
+                    except Exception as e:
+                        logger.error(f"LLM evaluation failed for {path}: {e}")
+                        logger.error(f"Full traceback: {traceback.format_exc()}")
+                        # Continue processing without LLM evaluation
                 
                 # Extract latency points
                 latency_points = []
@@ -130,6 +157,10 @@ class VoiceAgentEvaluatorService:
                     talk_ratio=metrics.get("talk_ratio", 0),
                     average_pitch=metrics.get("average_pitch", 0),
                     words_per_minute=metrics.get("words_per_minute", 0),
+                    toneAdherence=llm_evaluation.toneAdherence if llm_evaluation else None,
+                    personaAdherence=llm_evaluation.personaAdherence if llm_evaluation else None,
+                    languageSwitch=llm_evaluation.languageSwitch if llm_evaluation else None,
+                    sentiment=llm_evaluation.sentiment if llm_evaluation else None,
                 )
                 
                 logger.info(f"Successfully processed: {path}")
@@ -154,11 +185,13 @@ class VoiceAgentEvaluatorService:
     async def analyze_batch_strem(self, audio_files: AudioFileList):
         async def generate_results():
             """Async generator that yields results as files complete processing"""
-            logger.info(f"Starting streaming batch processing for {len(audio_files.file_paths)} files")
+            logger.info(f"Starting streaming batch processing for {len(audio_files.files)} files")
             downloaded_files: list[str] = []  # Track downloaded files for cleanup
             
-            for i, path in enumerate(audio_files.file_paths, 1):
-                logger.info(f"[{i}/{len(audio_files.file_paths)}] Processing: {path}")
+            for i, audio_file in enumerate(audio_files.files, 1):
+                path = audio_file.path
+                agent_id = audio_file.agent_id
+                logger.info(f"[{i}/{len(audio_files.files)}] Processing: {path}")
                 
                 try:
                     local_file_path = path
@@ -178,7 +211,7 @@ class VoiceAgentEvaluatorService:
                                 status="error",
                                 error_message=error_msg,
                             )
-                            logger.info(f"[{i}/{len(audio_files.file_paths)}] Error: {path}")
+                            logger.info(f"[{i}/{len(audio_files.files)}] Error: {path}")
                             yield error_result.model_dump_json() + "\n"
                             continue
 
@@ -192,7 +225,7 @@ class VoiceAgentEvaluatorService:
                             status="error",
                             error_message=error_msg,
                         )
-                        logger.info(f"[{i}/{len(audio_files.file_paths)}] Error: {path}")
+                        logger.info(f"[{i}/{len(audio_files.files)}] Error: {path}")
                         yield error_result.model_dump_json() + "\n"
                         continue
 
@@ -203,6 +236,20 @@ class VoiceAgentEvaluatorService:
                     # Run the processor in a thread pool to avoid blocking
                     loop = asyncio.get_event_loop()
                     metrics = await loop.run_in_executor(None, self.processor.process_file, local_file_path)
+
+                    # Run LLM evaluation
+                    llm_evaluation = None
+                    if self.llm_evaluator is None:
+                        logger.warning(f"LLM Evaluator not available, skipping evaluation for {filename}")
+                    else:
+                        try:
+                            logger.info(f"Starting LLM evaluation for {filename} with agent_id {agent_id}")
+                            llm_evaluation = await loop.run_in_executor(None, self.llm_evaluator.run_evaluation, local_file_path, agent_id)
+                            logger.info(f"LLM evaluation completed successfully for {filename}")
+                        except Exception as e:
+                            logger.error(f"LLM evaluation failed for {path}: {e}")
+                            logger.error(f"Full traceback: {traceback.format_exc()}")
+                            # Continue processing without LLM evaluation
 
                     # Extract latency points
                     latency_points = []
@@ -250,9 +297,13 @@ class VoiceAgentEvaluatorService:
                         talk_ratio=metrics.get("talk_ratio", 0),
                         average_pitch=metrics.get("average_pitch", 0),
                         words_per_minute=metrics.get("words_per_minute", 0),
+                        toneAdherence=llm_evaluation.toneAdherence if llm_evaluation else None,
+                        personaAdherence=llm_evaluation.personaAdherence if llm_evaluation else None,
+                        languageSwitch=llm_evaluation.languageSwitch if llm_evaluation else None,
+                        sentiment=llm_evaluation.sentiment if llm_evaluation else None,
                     )
 
-                    logger.info(f"[{i}/{len(audio_files.file_paths)}] Completed: {path}")
+                    logger.info(f"[{i}/{len(audio_files.files)}] Completed: {path}")
                     yield result.model_dump_json() + "\n"
 
                 except Exception as e:
@@ -265,11 +316,11 @@ class VoiceAgentEvaluatorService:
                         status="error",
                         error_message=error_msg,
                     )
-                    logger.info(f"[{i}/{len(audio_files.file_paths)}] Error: {path}")
+                    logger.info(f"[{i}/{len(audio_files.files)}] Error: {path}")
                     yield error_result.model_dump_json() + "\n"
 
             self.downloader.cleanup_temp_dir()
-            logger.info(f"Streaming batch processing complete for {len(audio_files.file_paths)} files")
+            logger.info(f"Streaming batch processing complete for {len(audio_files.files)} files")
 
         return StreamingResponse(
             generate_results(),

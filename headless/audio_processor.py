@@ -279,12 +279,12 @@ class AudioProcessor:
 
         # Add debug output to track timeline creation
         print(f"DEBUG: Created {len(merged_segments)} timeline segments:")
-        for i, seg in enumerate(merged_segments):
-            if seg.get("is_overlap"):
-                speakers_str = ', '.join(seg.get("speakers", []))
-                print(f"DEBUG: Turn {i+1}: {seg['speaker']} {seg['start']:.1f}-{seg['end']:.1f} (OVERLAP: [{speakers_str}])")
-            else:
-                print(f"DEBUG: Turn {i+1}: {seg['speaker']} {seg['start']:.1f}-{seg['end']:.1f}")
+        #for i, seg in enumerate(merged_segments):
+            #if seg.get("is_overlap"):
+                #speakers_str = ', '.join(seg.get("speakers", []))
+                #print(f"DEBUG: Turn {i+1}: {seg['speaker']} {seg['start']:.1f}-{seg['end']:.1f} (OVERLAP: [{speakers_str}])")
+            #else:
+                #print(f"DEBUG: Turn {i+1}: {seg['speaker']} {seg['start']:.1f}-{seg['end']:.1f}")
         
         return merged_segments
 

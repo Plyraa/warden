@@ -1,7 +1,3 @@
-"""
-Headless Warden - Pure FastAPI Audio Processing Service
-No database, no ElevenLabs, no web UI - just streaming audio analysis
-"""
 import os
 import sys
 import asyncio
@@ -157,7 +153,6 @@ class VoiceAgentEvaluatorService:
                     talk_ratio=metrics.get("talk_ratio", 0),
                     average_pitch=metrics.get("average_pitch", 0),
                     words_per_minute=metrics.get("words_per_minute", 0),
-                    toneAdherence=llm_evaluation.toneAdherence if llm_evaluation else None,
                     personaAdherence=llm_evaluation.personaAdherence if llm_evaluation else None,
                     languageSwitch=llm_evaluation.languageSwitch if llm_evaluation else None,
                     sentiment=llm_evaluation.sentiment if llm_evaluation else None,
@@ -297,7 +292,6 @@ class VoiceAgentEvaluatorService:
                         talk_ratio=metrics.get("talk_ratio", 0),
                         average_pitch=metrics.get("average_pitch", 0),
                         words_per_minute=metrics.get("words_per_minute", 0),
-                        toneAdherence=llm_evaluation.toneAdherence if llm_evaluation else None,
                         personaAdherence=llm_evaluation.personaAdherence if llm_evaluation else None,
                         languageSwitch=llm_evaluation.languageSwitch if llm_evaluation else None,
                         sentiment=llm_evaluation.sentiment if llm_evaluation else None,

@@ -42,7 +42,6 @@ CSV_HEADERS = [
     'talk_ratio',
     'average_pitch',
     'words_per_minute',
-    'toneAdherence',
     'personaAdherence',
     'languageSwitch',
     'sentiment'

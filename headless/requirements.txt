@@ -17,3 +17,4 @@ singleton-decorator==1.0.0
 openai
 elevenlabs
 python-dotenv
+pyyaml

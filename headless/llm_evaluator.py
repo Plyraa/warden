@@ -1,5 +1,6 @@
 import os
 import requests
+import yaml
 from openai import OpenAI
 from elevenlabs.client import ElevenLabs
 from pydantic import BaseModel, Field
@@ -10,7 +11,6 @@ import json
 load_dotenv()
 
 class LlmEvaluationResult(BaseModel):
-    toneAdherence: int = Field(..., description="Adherence to the specified tone, from 1 to 5.", ge=1, le=5)
     personaAdherence: int = Field(..., description="Adherence to the specified persona, from 1 to 5.", ge=1, le=5)
     languageSwitch: bool = Field(..., description="Whether the agent switched languages.")
     sentiment: Literal["happy", "neutral", "angry", "disappointed"] = Field(..., description="The user's sentiment.")
@@ -31,6 +31,17 @@ class LlmEvaluator:
         self.openai_client = OpenAI(base_url="https://dev.jotform.ai/openai/v1", api_key=openai_key)
         self.elevenlabs_client = ElevenLabs(api_key=elevenlabs_key)
         self.jotform_agent_api_url = "https://www.jotform.com/API/ai-agent-builder/agents/{agent_id}/properties"
+        
+        # Load prompts from YAML file
+        self.prompts = self._load_prompts()
+    
+    def _load_prompts(self) -> Dict[str, str]:
+        """Load evaluation prompts from YAML file."""
+        prompts_file = os.path.join(os.path.dirname(__file__), "prompts.yaml")
+        with open(prompts_file, 'r', encoding='utf-8') as file:
+            prompts = yaml.safe_load(file)
+            print("✅ Evaluation prompts loaded from YAML file")
+            return prompts
 
     def get_agent_properties(self, agent_id: str) -> Dict[str, Any]:
         """
@@ -123,49 +134,18 @@ class LlmEvaluator:
         Evaluates the transcript using OpenAI's gpt-4o model with structured output.
         """
         print("\n--- Step 3: Evaluating Transcript with OpenAI ---")
-        system_prompt = """
-        You are an expert in conversation analysis. Your task is to evaluate a conversation between a user and an AI agent based on a provided transcript and the agent's predefined properties. 
-        You must provide your evaluation in a structured format.
-        """
+        
+        # Use prompts from YAML file
+        system_prompt = self.prompts["system_prompt"]
+        
+        user_prompt = self.prompts["user_prompt_template"].format(
+            persona=agent_properties.get('optimizedPersona', 'Not specified'),
+            language=agent_properties.get('language', 'Not specified'),
+            role=agent_properties.get('role', 'Not specified'),
+            transcript=transcript
+        )
 
-        user_prompt = f"""
-        Please evaluate the following conversation based on the provided agent properties.
-
-        **Agent Properties:**
-        - **Tone:** {agent_properties.get('tone')}
-        - **Persona:** {agent_properties.get('optimizedPersona')}
-        - **Language:** {agent_properties.get('language')}
-        - **Role:** {agent_properties.get('role')}
-
-        **Conversation Transcript:**
-        Note: The transcript is formatted with speaker labels (User/Agent) and may contain multiple turns. But those labels may be missing or plain wrong, like Agent message labeled as User or User message labeled as Agent. Infer what messages are from User and Agent yourself.
-        {transcript}
-
-        **Evaluation Criteria:**
-
-        1.  **Tone Adherence (Score 1-5):**
-            - Evaluate if the agent's responses match the specified tone and persona.
-            - 1: Not at all; 5: Perfectly.
-
-        2.  **Persona Adherence (Score 1-5):**
-            - Evaluate if the agent's messages align with its persona.
-            - 1: Not at all; 5: Perfectly.
-
-        3.  **Language Switch (Boolean):**
-            - Determine if the agent switched from the specified language ('{agent_properties.get('language')}').
-            - `true` if a switch occurred, `false` otherwise.
-
-        4.  **User Sentiment (Enum: "happy", "neutral", "angry", "disappointed"):**
-            - Analyze the user's overall sentiment towards the AI agent.
-            - Consider tone, word choice, and context.
-            - **Happy:** Satisfaction, gratitude.
-            - **Angry:** Frustration, harsh language.
-            - **Neutral:** Matter-of-fact, no strong emotion.
-            - **Disappointed:** Letdown, unfulfilled expectations.
-            - Briefly explain your reasoning before providing the final sentiment.
-        """
-
-        print("... Sending the following prompt to OpenAI ...")
+        print("... Sending evaluation request to OpenAI ...")
 
         response = self.openai_client.responses.parse(
             model="gpt-4.1-mini",
@@ -182,7 +162,6 @@ class LlmEvaluator:
         # Extract the parsed result from the response
         parsed_result = response.output[0].content[0].parsed
         print("✅ Extracted parsed result:")
-        print(f"toneAdherence: {parsed_result.toneAdherence}")
         print(f"personaAdherence: {parsed_result.personaAdherence}")
         print(f"languageSwitch: {parsed_result.languageSwitch}")
         print(f"sentiment: {parsed_result.sentiment}")

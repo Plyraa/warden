@@ -50,7 +50,6 @@ class MetricsResponse(BaseModel):
     average_pitch: float = 0.0
     words_per_minute: float = 0.0
     # LLM Evaluation Metrics
-    toneAdherence: Optional[int] = Field(None, description="Adherence to the specified tone, from 1 to 5.", ge=1, le=5)
     personaAdherence: Optional[int] = Field(None, description="Adherence to the specified persona, from 1 to 5.", ge=1, le=5)
     languageSwitch: Optional[bool] = Field(None, description="Whether the agent switched languages.")
     sentiment: Optional[Literal["happy", "neutral", "angry", "disappointed"]] = Field(None, description="The user's sentiment.")

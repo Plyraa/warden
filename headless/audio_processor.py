@@ -13,6 +13,7 @@ import time
 import constants
 from typing import Dict, Any, List, Tuple, Optional
 from scipy.signal import find_peaks
+from noise_reduction import apply_noise_reduction
 
 class AudioProcessor:
     def __init__(self, audio_dir: Path):
@@ -628,6 +629,14 @@ class AudioProcessor:
             
             # Downsample audio file
             audio, sr, output_path = self.downsample_audio(filename)
+
+            # Apply noise reduction to left channel (user channel) only
+            print("Applying noise reduction to user channel...")
+            try:
+                audio = apply_noise_reduction(audio, sr)
+                print("Noise reduction completed successfully")
+            except Exception as e:
+                print(f"Warning: Noise reduction failed, continuing with original audio: {e}")
 
             # Process user channel with Silero VAD
             print("Processing user channel with Silero VAD...")

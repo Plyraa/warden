@@ -14,10 +14,16 @@ from database import init_db, SessionLocal
 from fastapi.middleware.cors import CORSMiddleware
 
 
+class AudioFile(BaseModel):
+    """Model for individual audio file with metadata"""
+    path: str  # Can be local file path or URL
+    agent_id: str = None  # Optional agent ID for LLM evaluation
+
 class AudioFileList(BaseModel):
     """Model for list of audio files to analyze in batch mode"""
-
-    file_paths: List[str]  # Can be local file paths or URLs
+    files: List[AudioFile] = []  # List of files with metadata
+    file_paths: List[str] = []  # Keep for backward compatibility - Can be local file paths or URLs
+    enable_noise_reduction: bool = False  # Global noise reduction setting
 
 
 class MetricsResponse(BaseModel):
@@ -40,6 +46,10 @@ class MetricsResponse(BaseModel):
     talk_ratio: float = 0.0
     average_pitch: float = 0.0
     words_per_minute: float = 0.0
+    # LLM Evaluation metrics
+    personaAdherence: int = None
+    languageSwitch: bool = None  
+    sentiment: str = None
 
 
 @asynccontextmanager
@@ -101,13 +111,31 @@ def analyze_batch(audio_files: AudioFileList):
 
     Takes a list of file paths or URLs to audio files and returns metrics for each file.
     Returns partial results even if some files fail - each file gets a status indicator.
+    Supports agent IDs for LLM evaluation and noise reduction settings.
     """
     results = []
+    
+    # Create calculator with noise reduction setting
+    calculator = AudioMetricsCalculator(
+        batch_only=True,  # Keep transcription disabled for batch mode
+        enable_noise_reduction=audio_files.enable_noise_reduction
+    )
 
-    print(f"Received batch request for {len(audio_files.file_paths)} files")
+    # Handle both new and legacy formats for backward compatibility
+    files_to_process = []
+    if audio_files.files:
+        # New format with metadata
+        files_to_process = audio_files.files
+    elif audio_files.file_paths:
+        # Legacy format - convert to new format
+        files_to_process = [AudioFile(path=path) for path in audio_files.file_paths]
 
-    for path in audio_files.file_paths:
-        print(f"Processing: {path}")
+    print(f"Received batch request for {len(files_to_process)} files")
+
+    for audio_file in files_to_process:
+        path = audio_file.path
+        agent_id = audio_file.agent_id
+        print(f"Processing: {path} (agent_id: {agent_id or 'None'})")
 
         try:
             # Check if it's a URL or local file
@@ -211,7 +239,7 @@ def analyze_batch(audio_files: AudioFileList):
             print(f"Using filename: {filename}")
             # Process the file
             print(f"Calling process_file with filename: {filename}")
-            metrics = calculator.process_file(filename, source_url=source_url)
+            metrics = calculator.process_file(filename, source_url=source_url, agent_id=agent_id)
             print("process_file successful, received metrics")
 
             # Extract the latency points
@@ -290,6 +318,10 @@ def analyze_batch(audio_files: AudioFileList):
                 talk_ratio=metrics.get("talk_ratio", 0),
                 average_pitch=metrics.get("average_pitch", 0),
                 words_per_minute=metrics.get("words_per_minute", 0),
+                # LLM Evaluation metrics
+                personaAdherence=metrics.get("personaAdherence"),
+                languageSwitch=metrics.get("languageSwitch"),
+                sentiment=metrics.get("sentiment"),
             )
             print("MetricsResponse object created successfully")
             results.append(result)
@@ -321,14 +353,33 @@ async def analyze_batch_stream(audio_files: AudioFileList):
     Returns NDJSON (newline-delimited JSON) where each line is a complete result
     for one processed file. Files are processed sequentially but results are
     streamed immediately as each file completes.
+    Supports agent IDs for LLM evaluation and noise reduction settings.
     """
 
     async def generate_results():
         """Async generator that yields results as files complete processing"""
-        print(f"Starting streaming batch processing for {len(audio_files.file_paths)} files")
+        
+        # Create calculator with noise reduction setting  
+        calculator = AudioMetricsCalculator(
+            batch_only=True,  # Keep transcription disabled for batch mode
+            enable_noise_reduction=audio_files.enable_noise_reduction
+        )
+        
+        # Handle both new and legacy formats for backward compatibility
+        files_to_process = []
+        if audio_files.files:
+            # New format with metadata
+            files_to_process = audio_files.files
+        elif audio_files.file_paths:
+            # Legacy format - convert to new format
+            files_to_process = [AudioFile(path=path) for path in audio_files.file_paths]
+        
+        print(f"Starting streaming batch processing for {len(files_to_process)} files")
 
-        for i, path in enumerate(audio_files.file_paths, 1):
-            print(f"[{i}/{len(audio_files.file_paths)}] Processing: {path}")
+        for i, audio_file in enumerate(files_to_process, 1):
+            path = audio_file.path
+            agent_id = audio_file.agent_id
+            print(f"[{i}/{len(files_to_process)}] Processing: {path} (agent_id: {agent_id or 'None'})")
 
             try:
                 # Check if it's a URL or local file
@@ -419,9 +470,7 @@ async def analyze_batch_stream(audio_files: AudioFileList):
                 loop = asyncio.get_event_loop()
                 metrics = await loop.run_in_executor(
                     None, 
-                    calculator.process_file, 
-                    filename, 
-                    source_url
+                    lambda: calculator.process_file(filename, source_url=source_url, agent_id=agent_id)
                 )
 
                 # Extract latency points
@@ -472,9 +521,13 @@ async def analyze_batch_stream(audio_files: AudioFileList):
                     talk_ratio=metrics.get("talk_ratio", 0),
                     average_pitch=metrics.get("average_pitch", 0),
                     words_per_minute=metrics.get("words_per_minute", 0),
+                    # LLM Evaluation metrics
+                    personaAdherence=metrics.get("personaAdherence"),
+                    languageSwitch=metrics.get("languageSwitch"),
+                    sentiment=metrics.get("sentiment"),
                 )
 
-                print(f"[{i}/{len(audio_files.file_paths)}] Completed: {path}")
+                print(f"[{i}/{len(files_to_process)}] Completed: {path}")
                 yield result.model_dump_json() + "\n"
 
             except Exception as e:

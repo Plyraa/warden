@@ -18,3 +18,4 @@ openai
 elevenlabs
 python-dotenv
 pyyaml
+denoiser

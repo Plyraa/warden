@@ -1,12 +1,18 @@
 # Warden - AI Agent Call Audio Analysis
 
-A comprehensive audio analysis system for evaluating AI agent call quality with real-time streaming capabilities.
+A comprehensive audio analysis system for evaluating AI agent call quality with real-time streaming capabilities and advanced LLM-powered evaluation features.
 
 ## Quick Start
 
 ```bash
 # Install dependencies
 pip install -r requirements.txt
+
+# Set up environment variables
+cp .env.example .env
+# Edit .env and add your API keys:
+# ELEVENLABS_API_KEY=your_elevenlabs_key
+# OPENAI_API_KEY=your_openai_key
 
 # Start both API server (8000) and Web UI (5000)
 python warden.py
@@ -24,8 +30,23 @@ python warden.py --web-only
 - **Batch Processing**: Analyze multiple files at once via `/batch`
 - **Audio Metrics**: Latency, overlap detection, talk ratio, pitch, WPM
 - **Transcription**: Speech-to-text with overlap analysis (ElevenLabs API)
-- **Web UI**: Interactive visualization and file management
+- **LLM Evaluation** (NEW): AI agent persona adherence, language consistency, and user sentiment analysis
+- **Noise Reduction** (NEW): Optional Facebook Denoiser for cleaner user audio
+- **Web UI**: Interactive visualization and file management with agent ID input
 - **URL Support**: Process remote audio files automatically
+
+## NEW Features 🚀
+
+### LLM-Powered Agent Evaluation
+- **Persona Adherence**: 1-5 scale rating of how well the agent maintains its defined character
+- **Language Switch Detection**: Identifies if the agent switched languages unexpectedly  
+- **User Sentiment Analysis**: Categorizes user emotion as happy/neutral/angry/disappointed
+- **Agent Properties Integration**: Fetches agent configuration from JotForm API
+
+### Noise Reduction
+- **Facebook Denoiser**: Optional noise reduction for user audio channel
+- **UI Toggle**: Enable/disable noise reduction in the web interface
+- **Channel-Specific**: Only applies to user channel, preserving agent audio quality
 
 ## API Endpoints
 

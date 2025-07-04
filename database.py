@@ -59,6 +59,12 @@ class AudioAnalysis(Base):
     )  # JSON string for agent VAD-detected segments
     overlap_data_json = Column(String)  # JSON string for overlap detection data
 
+    # LLM Evaluation metrics
+    persona_adherence = Column(Integer)  # 1-5 scale
+    language_switch = Column(Boolean)    # True if agent switched languages
+    sentiment = Column(String)           # "happy", "neutral", "angry", "disappointed"
+    llm_evaluation_json = Column(String)  # Full LLM evaluation data as JSON
+
     # Relationship to Transcript
     transcript_id = Column(Integer, ForeignKey("transcripts.id"))
     transcript = relationship("Transcript", back_populates="audio_analysis")
@@ -90,11 +96,15 @@ def init_db():
     if "audio_analyses" in inspector.get_table_names():
         columns = [
             col["name"] for col in inspector.get_columns("audio_analyses")
-        ]  # If any of the new columns don't exist, recreate the tables
+        ]        # If any of the new columns don't exist, recreate the tables
         if (
             "vad_latency_details_json" not in columns
             or "overlap_data_json" not in columns
             or "agent_vad_segments_json" not in columns
+            or "persona_adherence" not in columns
+            or "language_switch" not in columns
+            or "sentiment" not in columns
+            or "llm_evaluation_json" not in columns
         ):
             print("Recreating database with new schema...")
             Base.metadata.drop_all(bind=engine)
@@ -119,6 +129,10 @@ def add_analysis(db_session, metrics_data):
     agent_vad_segments_json = json.dumps(metrics_data.get("agent_vad_segments", []))
     vad_latency_details_json = json.dumps(metrics_data.get("vad_latency_details", []))
     overlap_data_json = json.dumps(metrics_data.get("overlap_data", {}))
+    
+    # Extract LLM evaluation data
+    llm_evaluation = metrics_data.get("llm_evaluation")
+    llm_evaluation_json = json.dumps(llm_evaluation.__dict__) if llm_evaluation else None
 
     vad_latency_metrics = metrics_data.get("vad_latency_metrics", {})
     transcript_data = metrics_data.get("transcript_data")
@@ -146,6 +160,11 @@ def add_analysis(db_session, metrics_data):
         user_vad_segments_json=user_vad_segments_json,
         agent_vad_segments_json=agent_vad_segments_json,
         overlap_data_json=overlap_data_json,
+        # LLM Evaluation metrics
+        persona_adherence=metrics_data.get("personaAdherence"),
+        language_switch=metrics_data.get("languageSwitch"),
+        sentiment=metrics_data.get("sentiment"),
+        llm_evaluation_json=llm_evaluation_json,
     )
 
     if transcript_data:
@@ -216,6 +235,10 @@ def recreate_metrics_from_db(db_record: AudioAnalysis):
         "agent_vad_segments": json.loads(db_record.agent_vad_segments_json or "[]"),
         "overlap_data": json.loads(db_record.overlap_data_json or "{}"),
         "analysis_timestamp": db_record.analysis_timestamp,
+        # LLM Evaluation metrics
+        "personaAdherence": db_record.persona_adherence,
+        "languageSwitch": db_record.language_switch,
+        "sentiment": db_record.sentiment,
     }
 
     if db_record.transcript:

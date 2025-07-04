@@ -16,6 +16,21 @@ from database import (
     recreate_metrics_from_db,
 )
 
+# New LLM evaluation and noise reduction imports
+try:
+    from llm_evaluator import LlmEvaluator
+    LLM_EVALUATOR_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: LLM Evaluator not available: {e}")
+    LLM_EVALUATOR_AVAILABLE = False
+
+try:
+    from noise_reduction import apply_noise_reduction
+    NOISE_REDUCTION_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: Noise reduction not available: {e}")
+    NOISE_REDUCTION_AVAILABLE = False
+
 # Load environment variables from .env file
 from dotenv import load_dotenv
 
@@ -23,18 +38,30 @@ load_dotenv()
 
 
 class AudioMetricsCalculator:
-    def __init__(self, input_dir="stereo_test_calls", output_dir="sampled_test_calls", batch_only=False):
+    def __init__(self, input_dir="stereo_test_calls", output_dir="sampled_test_calls", batch_only=False, enable_noise_reduction=False):
         """Initialize the calculator with input and output directories
         
         Args:
             input_dir: Directory containing input audio files
             output_dir: Directory to save processed audio files
             batch_only: If True, skips ElevenLabs transcription for batch processing
+            enable_noise_reduction: If True, applies noise reduction to user audio channel
         """
         self.input_dir = input_dir
         self.output_dir = output_dir
         self.batch_only = batch_only
+        self.enable_noise_reduction = enable_noise_reduction
         self.elevenlabs_client = None
+        
+        # Initialize LLM evaluator if available
+        self.llm_evaluator = None
+        if LLM_EVALUATOR_AVAILABLE and not batch_only:
+            try:
+                self.llm_evaluator = LlmEvaluator()
+                print("✅ LLM Evaluator initialized successfully")
+            except Exception as e:
+                print(f"❌ Failed to initialize LLM Evaluator: {e}")
+                self.llm_evaluator = None
         
         # Skip ElevenLabs initialization in batch-only mode
         if not batch_only:
@@ -1468,10 +1495,65 @@ class AudioMetricsCalculator:
                 if overlap_start < overlap_end:
                     segment_overlap += overlap_end - overlap_start
 
-            total_overlap += segment_overlap  # Return overlap ratio
+            total_overlap += segment_overlap        # Return overlap ratio
         return total_overlap / total_duration_a if total_duration_a > 0 else 0.0
 
-    def process_file(self, filename, source_url=None):
+    def apply_noise_reduction_if_enabled(self, audio, sr):
+        """
+        Apply noise reduction to audio if enabled and available
+        
+        Args:
+            audio: Stereo audio array with shape (2, samples)
+            sr: Sample rate
+            
+        Returns:
+            Audio array (potentially denoised)
+        """
+        if not self.enable_noise_reduction:
+            return audio
+            
+        if not NOISE_REDUCTION_AVAILABLE:
+            print("Warning: Noise reduction requested but not available")
+            return audio
+            
+        try:
+            print("Applying noise reduction to user channel...")
+            denoised_audio = apply_noise_reduction(audio, sr)
+            print("Noise reduction applied successfully")
+            return denoised_audio
+        except Exception as e:
+            print(f"Error applying noise reduction: {e}")
+            print("Continuing with original audio")
+            return audio
+
+    def run_llm_evaluation(self, file_path: str, agent_id: str = None):
+        """
+        Run LLM evaluation on the audio file if evaluator is available
+        
+        Args:
+            file_path: Path to the audio file
+            agent_id: Agent ID for evaluation (optional)
+            
+        Returns:
+            LLM evaluation result or None if not available
+        """
+        if not self.llm_evaluator:
+            return None
+            
+        if not agent_id:
+            print("Warning: No agent_id provided for LLM evaluation")
+            return None
+            
+        try:
+            print(f"Running LLM evaluation for {os.path.basename(file_path)} with agent_id {agent_id}")
+            evaluation = self.llm_evaluator.run_evaluation(file_path, agent_id)
+            print("LLM evaluation completed successfully")
+            return evaluation
+        except Exception as e:
+            print(f"LLM evaluation failed: {e}")
+            return None
+
+    def process_file(self, filename, source_url=None, agent_id=None):
         """Process a single audio file and calculate all metrics.
         Checks database first, if found, returns stored metrics.
         Otherwise, processes and stores new metrics.
@@ -1479,6 +1561,7 @@ class AudioMetricsCalculator:
         Args:
             filename: Can be either a filename relative to the input_dir or an absolute path
             source_url: Optional URL source if file was downloaded from web
+            agent_id: Optional agent ID for LLM evaluation
         """
         # Normalize the filename for database lookup
         base_filename = os.path.basename(filename)
@@ -1534,7 +1617,12 @@ class AudioMetricsCalculator:
             # Downsample audio file (this also handles existing downsampled files)
             audio, sr, output_path = self.downsample_audio(
                 filename
-            )  # Process user channel with Silero VAD for more accurate speech detection
+            )
+            
+            # Apply noise reduction if enabled
+            audio = self.apply_noise_reduction_if_enabled(audio, sr)
+            
+            # Process user channel with Silero VAD for more accurate speech detection
             print("Processing user channel with Silero VAD...")
             raw_user_vad_segments = self.detect_speech_silero_vad(audio[0], sr)
 
@@ -1597,7 +1685,17 @@ class AudioMetricsCalculator:
             # Calculate overlap detection using raw VAD segments for higher granularity
             overlap_data = self.detect_overlaps_from_vad_segments(
                 raw_user_vad_segments, raw_agent_vad_segments
-            )  # Calculate metrics
+            )
+            
+            # Run LLM evaluation if agent_id is provided
+            llm_evaluation = None
+            if agent_id:
+                llm_evaluation = self.run_llm_evaluation(
+                    original_file_path if os.path.exists(original_file_path) else output_path, 
+                    agent_id
+                )
+            
+            # Calculate metrics
             metrics = {
                 "filename": base_filename,  # Use base filename for consistent database lookups
                 "source_url": source_url,  # Store source URL if downloaded from web
@@ -1625,6 +1723,11 @@ class AudioMetricsCalculator:
                     audio, sr, agent_speech_turns
                 ),
                 "transcript_data": transcript_data,
+                # LLM evaluation results
+                "llm_evaluation": llm_evaluation,
+                "personaAdherence": llm_evaluation.personaAdherence if llm_evaluation else None,
+                "languageSwitch": llm_evaluation.languageSwitch if llm_evaluation else None,
+                "sentiment": llm_evaluation.sentiment if llm_evaluation else None,
             }
             # The "no transcript data available" message will be shown when transcript fails
             add_analysis(db_session, metrics)

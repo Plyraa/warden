@@ -181,4 +181,3 @@ class LlmEvaluator:
         evaluation = self.evaluate_transcript(transcript, agent_properties)
         print(f"===== LLM Evaluation for {os.path.basename(file_path)} Complete =====\n")
         return evaluation
-

@@ -44,6 +44,35 @@
             border-radius: 5px;
         }
         
+        .input-group {
+            margin-bottom: 15px;
+        }
+        
+        .input-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        
+        .input-group input[type="text"], 
+        .input-group select {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        
+        .checkbox-group input[type="checkbox"] {
+            margin-right: 10px;
+        }
+        
         .visualization-section {
             margin-bottom: 30px;
         }
@@ -224,12 +253,26 @@
             <img src="/static/podo_square.png" alt="Podo Mascot" class="mascot-image">
         </div>
         <div class="file-selector">
-            <h3>Select Audio File <span id="refreshAudioFiles" style="font-size: 0.8em; padding: 3px 8px; cursor: pointer; color: #0066cc;">↻</span></h3>
+            <h3>Audio Analysis Settings <span id="refreshAudioFiles" style="font-size: 0.8em; padding: 3px 8px; cursor: pointer; color: #0066cc;">↻</span></h3>
             <div id="refreshStatus" style="font-size: 0.8em; color: #666; margin-bottom: 5px;"></div>
             <form id="audioForm">
-                <select id="audioFile" required>
-                    <option value="">-- Select a file --</option>
-                </select>
+                <div class="input-group">
+                    <label for="audioFile">Select Audio File:</label>
+                    <select id="audioFile" required>
+                        <option value="">-- Select a file --</option>
+                    </select>
+                </div>
+                
+                <div class="input-group">
+                    <label for="agentId">Agent ID (optional for LLM evaluation):</label>
+                    <input type="text" id="agentId" placeholder="Enter agent ID for persona/sentiment analysis">
+                </div>
+                
+                <div class="checkbox-group">
+                    <input type="checkbox" id="enableNoiseReduction">
+                    <label for="enableNoiseReduction">Enable Noise Reduction (experimental)</label>
+                </div>
+                
                 <button type="submit">Analyze</button>
             </form>
         </div>
@@ -316,13 +359,19 @@
                 resultContainer.style.display = 'none';
                 
                 const audioFile = document.getElementById('audioFile').value;
+                const agentId = document.getElementById('agentId').value;
+                const enableNoiseReduction = document.getElementById('enableNoiseReduction').checked;
                 
                 fetch('/analyze_audio', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify({ audioFile: audioFile }),
+                    body: JSON.stringify({ 
+                        audioFile: audioFile,
+                        agentId: agentId,
+                        enableNoiseReduction: enableNoiseReduction
+                    }),
                 })
                 .then(response => response.json())
                 .then (data => {

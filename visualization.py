@@ -372,7 +372,34 @@ class AudioVisualizer:
                         <td>{:.2f} WPM</td>
                         <td>Estimated speech speed of AI agent</td>
                     </tr>
-                </table>            </div>
+                </table>
+            </div>
+            
+            <div class="metrics-section">
+                <h4>LLM Evaluation Metrics</h4>
+                <table class="metrics-table">
+                    <tr>
+                        <th>Metric</th>
+                        <th>Value</th>
+                        <th>Description</th>
+                    </tr>
+                    <tr>
+                        <td>Persona Adherence</td>
+                        <td>{}</td>
+                        <td>How well the agent adhered to its defined persona (1-5 scale)</td>
+                    </tr>
+                    <tr>
+                        <td>Language Switch</td>
+                        <td>{}</td>
+                        <td>Whether the agent switched languages during conversation</td>
+                    </tr>
+                    <tr>
+                        <td>User Sentiment</td>
+                        <td>{}</td>
+                        <td>Overall sentiment of the user during the conversation</td>
+                    </tr>
+                </table>
+            </div>
         </div>
         """.format(
             # VAD metrics
@@ -394,6 +421,10 @@ class AudioVisualizer:
             metrics["talk_ratio"],
             metrics["average_pitch"],
             metrics["words_per_minute"],
+            # LLM evaluation metrics
+            f"{metrics.get('personaAdherence', 'N/A')}/5" if metrics.get('personaAdherence') else "Not evaluated",
+            "Yes" if metrics.get('languageSwitch') else "No" if metrics.get('languageSwitch') is not None else "Not evaluated",
+            metrics.get('sentiment', 'Not evaluated').title() if metrics.get('sentiment') else "Not evaluated"
         )
 
         return html

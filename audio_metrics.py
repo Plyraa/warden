@@ -8,14 +8,6 @@ import traceback  # Added for error logging
 import torch  # For Silero VAD
 import time  # For timing the VAD processing
 
-# Database imports
-from database import (
-    get_db,
-    add_analysis,
-    get_analysis_by_filename,
-    recreate_metrics_from_db,
-)
-
 # New LLM evaluation and noise reduction imports
 try:
     from llm_evaluator import LlmEvaluator
@@ -43,7 +35,7 @@ class AudioMetricsCalculator:
         
         Args:
             input_dir: Directory containing input audio files
-            output_dir: Directory to save processed audio files
+            output_dir: Directory to save processed audio files (48kHz upsampled for DeepFilterNet)
             batch_only: If True, skips ElevenLabs transcription for batch processing
             enable_noise_reduction: If True, applies noise reduction to user audio channel
         """
@@ -85,8 +77,8 @@ class AudioMetricsCalculator:
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
 
-    def downsample_audio(self, input_file, target_sr=16000):
-        """Downsample stereo audio file to target sample rate and return left and right channels, preserving format."""
+    def upsample_audio(self, input_file, target_sr=48000):
+        """Upsample stereo audio file to target sample rate and return left and right channels, preserving format."""
         # Check if input_file is an absolute path
         if os.path.isabs(input_file) and os.path.exists(input_file):
             input_path = input_file
@@ -99,7 +91,7 @@ class AudioMetricsCalculator:
 
         output_filename = (
             os.path.splitext(base_filename)[0]
-            + "_downsampled"
+            + "_upsampled"
             + os.path.splitext(base_filename)[1]
         )
         output_path = os.path.join(self.output_dir, output_filename)
@@ -131,9 +123,9 @@ class AudioMetricsCalculator:
                     f"Input file not found: {input_file}. Tried paths: {input_path}, {', '.join(alt_paths)}"
                 )
 
-        # Check if downsampled file already exists
+        # Check if upsampled file already exists
         if os.path.exists(output_path):
-            print(f"Found existing downsampled file: {output_path}")
+            print(f"Found existing upsampled file: {output_path}")
             try:
                 # Ensure consistent return type with processing case
                 audio, sr = librosa.load(output_path, sr=target_sr, mono=False)
@@ -146,10 +138,10 @@ class AudioMetricsCalculator:
                     audio = audio.T
                 return audio, sr, output_path
             except Exception as e:
-                print(f"ERROR: Failed to load existing downsampled file: {str(e)}")
-                # Continue with re-downsampling if loading failed
-                print("Will attempt to re-downsample the file...")
-                print(f"Downsampling {input_file} to {output_path}")
+                print(f"ERROR: Failed to load existing upsampled file: {str(e)}")
+                # Continue with re-upsampling if loading failed
+                print("Will attempt to re-upsample the file...")
+                print(f"Upsampling {input_file} to {output_path}")
         file_extension = os.path.splitext(input_file)[1].lower()
         try:
             if file_extension == ".mp3":
@@ -275,9 +267,9 @@ class AudioMetricsCalculator:
                 audio_segment.export(output_path, format="mp3")
                 print("Export completed successfully")
 
-                # For consistency with librosa's output, load the downsampled mp3 with librosa
+                # For consistency with librosa's output, load the upsampled mp3 with librosa
                 # This is for the return value, the file is already saved.
-                print("Loading downsampled file with librosa for return value")
+                print("Loading upsampled file with librosa for return value")
                 audio, sr = librosa.load(output_path, sr=target_sr, mono=False)
                 print(f"Loaded audio shape: {audio.shape}, sr={sr}")
 
@@ -396,7 +388,7 @@ class AudioMetricsCalculator:
                     print(f"Resampling from {sr}Hz to {target_sr}Hz")
                     audio = librosa.resample(audio, orig_sr=sr, target_sr=target_sr)
 
-                # Save downsampled audio
+                # Save upsampled audio
                 print(f"Saving to: {output_path}")
                 # soundfile.write expects (samples, channels)
                 sf.write(output_path, audio.T, target_sr)
@@ -404,13 +396,118 @@ class AudioMetricsCalculator:
             else:
                 raise ValueError(f"Unsupported file format: {file_extension}")
 
-            print("Downsampling completed successfully")
+            print("Upsampling completed successfully")
+            return audio, target_sr, output_path
+
+        except Exception as e:
+            print(f"ERROR in upsampling: {str(e)}")
+            print(f"Stack trace: {traceback.format_exc()}")
+            raise
+
+    def downsample_audio(self, input_file, target_sr=16000):
+        """Downsample stereo audio file to target sample rate and return left and right channels"""
+        # Check if input_file is an absolute path
+        if os.path.isabs(input_file) and os.path.exists(input_file):
+            input_path = input_file
+        else:
+            input_path = os.path.join(self.input_dir, input_file)
+
+        if not os.path.exists(input_path):
+            raise FileNotFoundError(f"Input file not found: {input_path}")
+
+        base_filename = os.path.basename(input_path)
+        output_filename = (
+            os.path.splitext(base_filename)[0] + "_downsampled" + os.path.splitext(base_filename)[1]
+        )
+        output_path = os.path.join(self.output_dir, output_filename)
+
+        # Remove existing downsampled file for fresh processing
+        if os.path.exists(output_path):
+            print(f"Removing existing downsampled file for fresh processing: {output_path}")
+            os.remove(output_path)
+
+        file_extension = os.path.splitext(input_path)[1].lower()
+
+        try:
+            if file_extension == ".mp3":
+                print(f"Loading MP3 file: {input_path}")
+                # Use pydub for MP3 files
+                audio_segment = AudioSegment.from_mp3(input_path)
+                
+                # Ensure stereo
+                if audio_segment.channels == 1:
+                    print("Converting mono to stereo")
+                    audio_segment = audio_segment.set_channels(2)
+
+                # Resample if necessary
+                if audio_segment.frame_rate != target_sr:
+                    print(f"Resampling from {audio_segment.frame_rate}Hz to {target_sr}Hz")
+                    audio_segment = audio_segment.set_frame_rate(target_sr)
+
+                print(f"Exporting to: {output_path}")
+                audio_segment.export(output_path, format="mp3")
+                
+                # Load with librosa for return value
+                audio, sr = librosa.load(output_path, sr=target_sr, mono=False)
+                if len(audio.shape) == 1:
+                    audio = np.array([audio, audio])
+                elif audio.shape[0] != 2 and audio.shape[1] == 2:
+                    audio = audio.T
+
+            elif file_extension == ".wav":
+                print(f"Loading WAV file: {input_path}")
+                audio, sr = librosa.load(input_path, sr=None, mono=False)
+                
+                # If audio is mono, duplicate to create stereo
+                if len(audio.shape) == 1:
+                    audio = np.array([audio, audio])
+                elif audio.shape[0] != 2 and audio.shape[1] == 2:
+                    audio = audio.T
+
+                # Resample if necessary
+                if sr != target_sr:
+                    print(f"Resampling from {sr}Hz to {target_sr}Hz")
+                    audio = librosa.resample(audio, orig_sr=sr, target_sr=target_sr)
+
+                # Save downsampled audio
+                print(f"Saving to: {output_path}")
+                sf.write(output_path, audio.T, target_sr)
+            else:
+                raise ValueError(f"Unsupported file format: {file_extension}")
+
             return audio, target_sr, output_path
 
         except Exception as e:
             print(f"ERROR in downsampling: {str(e)}")
-            print(f"Stack trace: {traceback.format_exc()}")
             raise
+
+    def downsample_for_vad(self, audio, current_sr, target_sr=16000):
+        """
+        Downsample audio from current sample rate to target sample rate for VAD processing.
+        This is used after noise reduction to prepare audio for Silero VAD.
+        
+        Args:
+            audio: Stereo audio array with shape (2, samples)
+            current_sr: Current sample rate of the audio
+            target_sr: Target sample rate (default 16000 for Silero VAD)
+            
+        Returns:
+            Downsampled audio array with shape (2, samples)
+        """
+        if current_sr == target_sr:
+            print(f"Audio already at target sample rate ({target_sr}Hz), no resampling needed")
+            return audio
+            
+        print(f"Downsampling audio from {current_sr}Hz to {target_sr}Hz for VAD processing")
+        
+        # Resample both channels
+        left_channel = librosa.resample(audio[0], orig_sr=current_sr, target_sr=target_sr)
+        right_channel = librosa.resample(audio[1], orig_sr=current_sr, target_sr=target_sr)
+        
+        downsampled_audio = np.array([left_channel, right_channel])
+        print(f"Downsampling completed. New shape: {downsampled_audio.shape}")
+        
+        return downsampled_audio
 
     def _get_transcript_for_file(
         self,
@@ -672,6 +769,8 @@ class AudioMetricsCalculator:
             audio_channel = librosa.resample(
                 audio_channel, orig_sr=sr, target_sr=self.sampling_rate
             )
+        else:
+            print(f"Audio already at VAD sample rate ({self.sampling_rate}Hz)")
 
         # Convert to float32 tensor
         tensor_audio = torch.FloatTensor(audio_channel)
@@ -1554,186 +1653,140 @@ class AudioMetricsCalculator:
             return None
 
     def process_file(self, filename, source_url=None, agent_id=None):
-        """Process a single audio file and calculate all metrics.
-        Checks database first, if found, returns stored metrics.
-        Otherwise, processes and stores new metrics.
+        """Process a single audio file and return metrics.
 
         Args:
             filename: Can be either a filename relative to the input_dir or an absolute path
             source_url: Optional URL source if file was downloaded from web
             agent_id: Optional agent ID for LLM evaluation
         """
-        # Normalize the filename for database lookup
+        # Normalize the filename for consistency
         base_filename = os.path.basename(filename)
-
-        db_session = next(get_db())  # Get a database session
-        try:
-            existing_analysis_db = get_analysis_by_filename(db_session, base_filename)
-            if existing_analysis_db:
-                print(
-                    f"Found existing analysis for {base_filename} in database. Returning stored data."
-                )
-                metrics = recreate_metrics_from_db(existing_analysis_db)
-                # Ensure downsampled path is available, even if loading from DB
-                _audio, _sr, _output_path = self.downsample_audio(
-                    filename
-                )  # audio and sr not used here
-                metrics["downsampled_path"] = _output_path  # Store the path                # Only try to get transcript if ElevenLabs client is available, transcript is missing, and not in batch_only mode
-                if not metrics.get("transcript_data") and self.elevenlabs_client and not self.batch_only:
-                    # Attempt to get transcript if EL client available and no transcript in DB
-                    print(
-                        f"Transcript data missing for {filename} (from DB), attempting to generate from audio."
-                    )
-                    # First, we need to get VAD segments for accurate speaker correlation
-                    audio, sr, _ = self.downsample_audio(filename)
-                    print(
-                        "Processing user channel with Silero VAD for transcript correlation..."
-                    )
-                    raw_user_vad_segments = self.detect_speech_silero_vad(audio[0], sr)
-                    print(
-                        "Processing agent channel with Silero VAD for transcript correlation..."
-                    )
-                    raw_agent_vad_segments = self.detect_speech_silero_vad(audio[1], sr)
-
-                    original_file_path = os.path.join(self.input_dir, filename)
-                    transcript_data = self._get_transcript_for_file(
-                        original_file_path,
-                        raw_user_vad_segments,
-                        raw_agent_vad_segments,
-                    )
-                    if transcript_data:
-                        metrics["transcript_data"] = transcript_data
-                        print(
-                            f"Generated transcript for {filename} (was missing from DB)."
-                        )
-                    else:
-                        print(
-                            f"Failed to generate transcript for {filename}. No transcript data available."
-                        )
-                return metrics
-            print(
-                f"No existing analysis for {base_filename} in database. Processing anew."
-            )
-            # Downsample audio file (this also handles existing downsampled files)
-            audio, sr, output_path = self.downsample_audio(
-                filename
-            )
+        print(f"Processing {base_filename} - running stateless analysis...")
+        
+        # Optimized flow: only upsample to 48kHz if noise reduction is enabled
+        if self.enable_noise_reduction:
+            print("Noise reduction enabled - upsampling to 48kHz for noise suppression")
+            # Load and upsample audio file to 48kHz for noise reduction
+            audio, sr, output_path = self.upsample_audio(filename)
             
-            # Apply noise reduction if enabled
+            # Apply noise reduction (processes at 48kHz)
             audio = self.apply_noise_reduction_if_enabled(audio, sr)
             
-            # Process user channel with Silero VAD for more accurate speech detection
-            print("Processing user channel with Silero VAD...")
-            raw_user_vad_segments = self.detect_speech_silero_vad(audio[0], sr)
+            # Downsample to 16kHz for VAD processing
+            vad_audio = self.downsample_for_vad(audio, sr)
+            vad_sr = 16000
+        else:
+            print("Noise reduction disabled - downsampling directly to 16kHz for VAD")
+            # Direct path: downsample to 16kHz for VAD (no need for 48kHz)
+            vad_audio, vad_sr, output_path = self.downsample_audio(filename)
+            # Keep references for compatibility
+            audio = vad_audio
+            sr = vad_sr
+        
+        # Process user channel with Silero VAD for more accurate speech detection
+        print("Processing user channel with Silero VAD...")
+        raw_user_vad_segments = self.detect_speech_silero_vad(vad_audio[0], vad_sr)
 
-            # Process agent channel with Silero VAD
-            print("Processing agent channel with Silero VAD...")
-            raw_agent_vad_segments = self.detect_speech_silero_vad(
-                audio[1], sr
-            )  # Get transcript with improved overlap handling (if ElevenLabs client is available)
-            # Now we pass the VAD segments for accurate speaker correlation
-            transcript_data = None
-            if self.elevenlabs_client:
-                # Check if filename is already an absolute path
-                if os.path.isabs(filename) and os.path.exists(filename):
-                    original_file_path = filename
-                else:
-                    original_file_path = os.path.join(self.input_dir, filename)
-                print(f"Attempting transcription for {original_file_path}...")
-                transcript_data = self._get_transcript_for_file(
-                    original_file_path, raw_user_vad_segments, raw_agent_vad_segments
-                )
-                if transcript_data:
-                    print(f"Successfully transcribed {filename}.")
-                    print(
-                        f"Found {transcript_data.get('overlap_count', 0)} overlapping speech segments."
-                    )
-                else:
-                    print(f"Transcription failed or yielded no data for {filename}.")
+        # Process agent channel with Silero VAD
+        print("Processing agent channel with Silero VAD...")
+        raw_agent_vad_segments = self.detect_speech_silero_vad(vad_audio[1], vad_sr)
+        
+        # Get transcript with improved overlap handling (if ElevenLabs client is available)
+        # Now we pass the VAD segments for accurate speaker correlation
+        transcript_data = None
+        if self.elevenlabs_client:
+            # Check if filename is already an absolute path
+            if os.path.isabs(filename) and os.path.exists(filename):
+                original_file_path = filename
             else:
-                if self.batch_only:
-                    print(f"Skipping transcription for {filename} (running in batch-only mode).")
-                else:
-                    print(f"Skipping transcription for {filename} (ElevenLabs client not configured).")
-
-            # Create combined and merged speaker turns
-            print("Creating combined speaker turns...")
-            combined_speaker_turns = self._create_combined_speaker_turns(
-                raw_user_vad_segments, raw_agent_vad_segments
-            )  # Extract merged turns for each speaker for subsequent calculations
-            user_speech_turns = [
-                {"start": turn["start"], "end": turn["end"]}
-                for turn in combined_speaker_turns
-                if turn["speaker"] == "user"
-            ]
-            agent_speech_turns = [
-                {"start": turn["start"], "end": turn["end"]}
-                for turn in combined_speaker_turns
-                if turn["speaker"] == "ai_agent"
-            ]
-
-            print(
-                f"Combined into {len(user_speech_turns)} user turns and {len(agent_speech_turns)} agent turns."
+                original_file_path = os.path.join(self.input_dir, filename)
+            print(f"Attempting transcription for {original_file_path}...")
+            transcript_data = self._get_transcript_for_file(
+                original_file_path, raw_user_vad_segments, raw_agent_vad_segments
             )
+            if transcript_data:
+                print(f"Successfully transcribed {filename}.")
+                print(f"Found {transcript_data.get('overlap_count', 0)} overlapping speech segments.")
+            else:
+                print(f"Transcription failed or yielded no data for {filename}.")
+        else:
+            if self.batch_only:
+                print(f"Skipping transcription for {filename} (running in batch-only mode).")
+            else:
+                print(f"Skipping transcription for {filename} (ElevenLabs client not configured).")
 
-            # Calculate VAD-based turn-taking latency metrics using merged turns (Agent_Start - User_End)
-            vad_latency_metrics, vad_latency_details = (
-                self.calculate_turn_taking_latency(
-                    user_speech_turns, agent_speech_turns
-                )
-            )  # vad_latency_metrics now includes 'ai_interruptions_handled_in_latency'
-            # Calculate overlap detection using raw VAD segments for higher granularity
-            overlap_data = self.detect_overlaps_from_vad_segments(
-                raw_user_vad_segments, raw_agent_vad_segments
+        # Create combined and merged speaker turns
+        print("Creating combined speaker turns...")
+        combined_speaker_turns = self._create_combined_speaker_turns(
+            raw_user_vad_segments, raw_agent_vad_segments
+        )
+        
+        # Extract merged turns for each speaker for subsequent calculations
+        user_speech_turns = [
+            {"start": turn["start"], "end": turn["end"]}
+            for turn in combined_speaker_turns
+            if turn["speaker"] == "user"
+        ]
+        agent_speech_turns = [
+            {"start": turn["start"], "end": turn["end"]}
+            for turn in combined_speaker_turns
+            if turn["speaker"] == "ai_agent"
+        ]
+
+        print(f"Combined into {len(user_speech_turns)} user turns and {len(agent_speech_turns)} agent turns.")
+
+        # Calculate VAD-based turn-taking latency metrics using merged turns (Agent_Start - User_End)
+        vad_latency_metrics, vad_latency_details = self.calculate_turn_taking_latency(
+            user_speech_turns, agent_speech_turns
+        )
+        
+        # Calculate overlap detection using raw VAD segments for higher granularity
+        overlap_data = self.detect_overlaps_from_vad_segments(
+            raw_user_vad_segments, raw_agent_vad_segments
+        )
+        
+        # Run LLM evaluation if agent_id is provided
+        llm_evaluation = None
+        if agent_id:
+            original_file_path = filename if os.path.isabs(filename) and os.path.exists(filename) else os.path.join(self.input_dir, filename)
+            llm_evaluation = self.run_llm_evaluation(
+                original_file_path if os.path.exists(original_file_path) else output_path, 
+                agent_id
             )
-            
-            # Run LLM evaluation if agent_id is provided
-            llm_evaluation = None
-            if agent_id:
-                llm_evaluation = self.run_llm_evaluation(
-                    original_file_path if os.path.exists(original_file_path) else output_path, 
-                    agent_id
-                )
-            
-            # Calculate metrics
-            metrics = {
-                "filename": base_filename,  # Use base filename for consistent database lookups
-                "source_url": source_url,  # Store source URL if downloaded from web
-                "original_path": filename,  # Store original path for reference
-                "downsampled_path": output_path,
-                "combined_speaker_turns": combined_speaker_turns,  # Store the combined turns
-                # Use merged turns for all relevant metrics
-                "user_vad_segments": user_speech_turns,
-                "agent_vad_segments": agent_speech_turns,
-                # New VAD-based latency metrics (Agent VAD Start - User VAD End)
-                "vad_latency_metrics": vad_latency_metrics,
-                "vad_latency_details": vad_latency_details,
-                # Overlap detection from combined speaker turns
-                "overlap_data": overlap_data,
-                "ai_interrupting_user": overlap_data["has_ai_interrupting_user"],
-                "user_interrupting_ai": overlap_data["has_user_interrupting_ai"],
-                # Other metrics
-                "talk_ratio": self.calculate_talk_ratio(
-                    user_speech_turns, agent_speech_turns
-                ),
-                "average_pitch": self.calculate_average_pitch(
-                    audio, sr
-                ),  # Pitch still uses raw audio
-                "words_per_minute": self.calculate_words_per_minute(
-                    audio, sr, agent_speech_turns
-                ),
-                "transcript_data": transcript_data,
-                # LLM evaluation results
-                "llm_evaluation": llm_evaluation,
-                "personaAdherence": llm_evaluation.personaAdherence if llm_evaluation else None,
-                "languageSwitch": llm_evaluation.languageSwitch if llm_evaluation else None,
-                "sentiment": llm_evaluation.sentiment if llm_evaluation else None,
-            }
-            # The "no transcript data available" message will be shown when transcript fails
-            add_analysis(db_session, metrics)
-            print(
-                f"Saved new analysis for {base_filename} to database with improved transcript handling."
-            )
-            return metrics
-        finally:
-            db_session.close()
+        
+        # Calculate metrics
+        metrics = {
+            "filename": base_filename,  # Use base filename for consistency
+            "source_url": source_url,  # Store source URL if downloaded from web
+            "original_path": filename,  # Store original path for reference
+            "processed_path": output_path,  # Store processed file path (48kHz with noise reduction OR 16kHz without)
+            "upsampled_path": output_path if self.enable_noise_reduction else None,  # Store 48kHz upsampled file path only if noise reduction was used
+            "downsampled_path": output_path,  # Backward compatibility field - now always the final processed file
+            "processing_sample_rate": sr,  # Store the sample rate used for processing (48kHz with noise reduction, 16kHz without)
+            "noise_reduction_applied": self.enable_noise_reduction,  # Track whether noise reduction was applied
+            "combined_speaker_turns": combined_speaker_turns,  # Store the combined turns
+            # Use merged turns for all relevant metrics
+            "user_vad_segments": user_speech_turns,
+            "agent_vad_segments": agent_speech_turns,
+            # New VAD-based latency metrics (Agent VAD Start - User VAD End)
+            "vad_latency_metrics": vad_latency_metrics,
+            "vad_latency_details": vad_latency_details,
+            # Overlap detection from combined speaker turns
+            "overlap_data": overlap_data,
+            "ai_interrupting_user": overlap_data["has_ai_interrupting_user"],
+            "user_interrupting_ai": overlap_data["has_user_interrupting_ai"],
+            # Other metrics (use original 48kHz audio for higher quality analysis)
+            "talk_ratio": self.calculate_talk_ratio(user_speech_turns, agent_speech_turns),
+            "average_pitch": self.calculate_average_pitch(audio, sr),  # Use 48kHz audio for better pitch analysis
+            "words_per_minute": self.calculate_words_per_minute(audio, sr, agent_speech_turns),
+            "transcript_data": transcript_data,
+            # LLM evaluation results
+            "llm_evaluation": llm_evaluation,
+            "personaAdherence": llm_evaluation.personaAdherence if llm_evaluation else None,
+            "languageSwitch": llm_evaluation.languageSwitch if llm_evaluation else None,
+            "sentiment": llm_evaluation.sentiment if llm_evaluation else None,
+        }
+        
+        print(f"Analysis completed for {base_filename} - returning metrics.")
+        return metrics

@@ -1,52 +1,55 @@
 """
-Facebook Denoiser implementation for noise reduction on user audio channel
+DeepFilterNet implementation for noise reduction on user audio channel
+Lightweight neural network alternative optimized for speech enhancement
 """
-import torch
-import torchaudio
 import numpy as np
-from typing import Tuple, Optional
+import librosa
+import torch
+import tempfile
 import os
-import argparse
+from typing import Tuple, Optional
 
-class FacebookDenoiser:
-    def __init__(self):
-        self.denoiser_model = None
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.sample_rate = 16000  # Facebook denoiser expects 16kHz
-        print(f"Initializing Facebook Denoiser on {self.device}")
+# Try to import DeepFilterNet
+try:
+    from df.enhance import enhance, init_df
+    from df.utils import download_file
+    import soundfile as sf
+    DEEPFILTERNET_AVAILABLE = True
+    print("✅ DeepFilterNet available - Using efficient neural denoiser")
+except ImportError:
+    DEEPFILTERNET_AVAILABLE = False
+    print("❌ DeepFilterNet not available. Install with: pip install deepfilternet")
+    print("Falling back to lightweight spectral processing")
+
+class DeepFilterNetDenoiser:
+    """DeepFilterNet - Modern lightweight neural network for noise suppression"""
     
-    def load_model(self) -> None:
-        """Load the Facebook denoiser model"""
+    def __init__(self, model_base_dir=None):
+        if not DEEPFILTERNET_AVAILABLE:
+            raise ImportError("DeepFilterNet not available. Install with: pip install deepfilternet")
+        
+        self.model = None
+        self.df_state = None
+        self.sr = 48000  # DeepFilterNet works at 48kHz
+        self.model_base_dir = model_base_dir
+        print("Initialized DeepFilterNet denoiser (RAM usage: 200-400MB)")
+        
+    def load_model(self):
+        """Load DeepFilterNet model"""
         try:
-            from denoiser.pretrained import add_model_flags, get_model
-            
-            print("Loading Facebook Denoiser model (this may take a while on first run)...")
-            
-            # Create argument parser and add model flags
-            parser = argparse.ArgumentParser()
-            add_model_flags(parser)
-            
-            # Parse empty args to get defaults, then set model to dns64
-            args = parser.parse_args([])
-            args.dns64 = True  # Use the DNS64 model
-            
-            # Get the pretrained model
-            self.denoiser_model = get_model(args).to(self.device)
-            self.denoiser_model.eval()  # Set to evaluation mode
-            print("Facebook Denoiser model loaded successfully")
-            
+            print("Loading DeepFilterNet model...")
+            self.model, self.df_state, _ = init_df(
+                model_base_dir=self.model_base_dir,
+                post_filter=True,  # Enable post-filter for better quality
+                log_level="WARNING"
+            )
+            print("DeepFilterNet model loaded successfully")
         except Exception as e:
-            raise RuntimeError(f"Failed to load Facebook Denoiser model: {e}")
-    
-    def get_model(self):
-        """Get the denoiser model, loading it if necessary"""
-        if self.denoiser_model is None:
-            self.load_model()
-        return self.denoiser_model
+            raise RuntimeError(f"Failed to load DeepFilterNet: {e}")
     
     def denoise_audio_channel(self, audio_channel: np.ndarray, sample_rate: int) -> np.ndarray:
         """
-        Apply noise reduction to a single audio channel using Facebook's denoiser
+        Apply DeepFilterNet to a single audio channel
         
         Args:
             audio_channel: 1D numpy array of audio samples
@@ -56,65 +59,54 @@ class FacebookDenoiser:
             Denoised audio channel as numpy array
         """
         try:
-            model = self.get_model()
+            if self.model is None:
+                self.load_model()
             
-            # Convert to torch tensor
-            audio_tensor = torch.FloatTensor(audio_channel)
-            
-            # Ensure audio is on the correct device
-            audio_tensor = audio_tensor.to(self.device)
-            
-            # Resample if necessary (denoiser expects 16kHz)
-            if sample_rate != self.sample_rate:
-                print(f"Resampling audio from {sample_rate}Hz to {self.sample_rate}Hz for denoising")
-                resampler = torchaudio.transforms.Resample(
-                    orig_freq=sample_rate, 
-                    new_freq=self.sample_rate
-                ).to(self.device)
-                audio_tensor = resampler(audio_tensor.unsqueeze(0)).squeeze(0)
-                original_sr = sample_rate
-                sample_rate = self.sample_rate
+            # Resample to 48kHz if needed (DeepFilterNet requirement)
+            if sample_rate != self.sr:
+                print(f"Resampling audio from {sample_rate}Hz to {self.sr}Hz for DeepFilterNet")
+                audio_48k = librosa.resample(
+                    audio_channel,
+                    orig_sr=sample_rate,
+                    target_sr=self.sr
+                )
             else:
-                original_sr = sample_rate
+                audio_48k = audio_channel.copy()
             
-            # Ensure correct shape for the model (batch_size, channels, length)
-            if len(audio_tensor.shape) == 1:
-                audio_tensor = audio_tensor.unsqueeze(0).unsqueeze(0)  # Add batch and channel dims
-            elif len(audio_tensor.shape) == 2:
-                audio_tensor = audio_tensor.unsqueeze(0)  # Add batch dim
+            # Convert to tensor
+            audio_tensor = torch.from_numpy(audio_48k).float().unsqueeze(0)  # Add batch dim
             
-            print("Applying Facebook's Denoiser to user channel...")
-            
-            # Apply denoising
+            # Apply enhancement
+            print("Applying DeepFilterNet enhancement...")
             with torch.no_grad():
-                denoised_tensor = model(audio_tensor)
+                enhanced_tensor = enhance(
+                    self.model, 
+                    self.df_state, 
+                    audio_tensor
+                )
             
-            # Remove batch and channel dimensions and convert back to numpy
-            denoised_audio = denoised_tensor.squeeze().cpu().numpy()
+            # Convert back to numpy
+            enhanced_audio = enhanced_tensor.squeeze(0).numpy()
             
             # Resample back to original sample rate if needed
-            if original_sr != self.sample_rate:
-                print(f"Resampling denoised audio back to {original_sr}Hz")
-                resampler_back = torchaudio.transforms.Resample(
-                    orig_freq=self.sample_rate,
-                    new_freq=original_sr
-                ).to(self.device)
-                denoised_tensor_back = resampler_back(
-                    torch.FloatTensor(denoised_audio).unsqueeze(0).to(self.device)
-                ).squeeze(0)
-                denoised_audio = denoised_tensor_back.cpu().numpy()
+            if sample_rate != self.sr:
+                print(f"Resampling enhanced audio back to {sample_rate}Hz")
+                enhanced_audio = librosa.resample(
+                    enhanced_audio,
+                    orig_sr=self.sr,
+                    target_sr=sample_rate
+                )
             
-            print("Denoising completed successfully")
-            return denoised_audio
+            # Trim to original length to handle any slight differences
+            return enhanced_audio[:len(audio_channel)]
             
         except Exception as e:
-            print(f"Error during denoising: {e}")
-            print("Falling back to original audio without denoising")
+            print(f"DeepFilterNet processing failed: {e}")
             return audio_channel
     
     def apply_noise_reduction_to_stereo(self, stereo_audio: np.ndarray, sample_rate: int) -> np.ndarray:
         """
-        Apply noise reduction only to the left channel (user channel) of stereo audio
+        Apply DeepFilterNet only to the left channel (user channel) of stereo audio
         
         Args:
             stereo_audio: 2D numpy array with shape (2, samples) - [left_channel, right_channel]
@@ -126,16 +118,16 @@ class FacebookDenoiser:
         if len(stereo_audio.shape) != 2 or stereo_audio.shape[0] != 2:
             raise ValueError(f"Expected stereo audio with shape (2, samples), got {stereo_audio.shape}")
         
-        print("Applying noise reduction to left channel (user channel) only...")
+        print("Applying DeepFilterNet to left channel (user channel) only...")
         
         # Extract channels
         left_channel = stereo_audio[0]  # User channel
         right_channel = stereo_audio[1]  # Agent channel - keep original
         
-        # Apply denoising only to left channel (user)
+        # Apply DeepFilterNet only to left channel
         denoised_left = self.denoise_audio_channel(left_channel, sample_rate)
         
-        # Ensure same length (in case of slight differences due to resampling)
+        # Ensure same length
         min_length = min(len(denoised_left), len(right_channel))
         denoised_left = denoised_left[:min_length]
         right_channel = right_channel[:min_length]
@@ -143,18 +135,108 @@ class FacebookDenoiser:
         # Reconstruct stereo audio with denoised left channel
         denoised_stereo = np.array([denoised_left, right_channel])
         
-        print(f"Noise reduction applied. Output shape: {denoised_stereo.shape}")
+        print(f"DeepFilterNet processing completed. Output shape: {denoised_stereo.shape}")
         return denoised_stereo
+
+
+class LightweightSpectralDenoiser:
+    """Fallback implementation when RNNoise is not available"""
+    
+    def __init__(self):
+        print("Initialized lightweight spectral denoiser (RAM usage: <10MB)")
+        
+    def denoise_audio_channel(self, audio_channel: np.ndarray, sample_rate: int) -> np.ndarray:
+        """Lightweight spectral subtraction"""
+        try:
+            # Simple bandpass filter for speech (300-3400 Hz)
+            from scipy.signal import butter, filtfilt
+            
+            nyquist = sample_rate / 2
+            low, high = 300/nyquist, min(3400/nyquist, 0.99)
+            
+            b, a = butter(4, [low, high], btype='band')
+            filtered = filtfilt(b, a, audio_channel)
+            
+            # Simple noise gate
+            threshold = np.percentile(np.abs(filtered), 20)  # Bottom 20% as noise floor
+            gate_mask = np.abs(filtered) > threshold
+            
+            # Smooth the gate to avoid clicks
+            from scipy.ndimage import gaussian_filter1d
+            gate_smooth = gaussian_filter1d(gate_mask.astype(float), sigma=100)
+            
+            # Apply gate with some noise floor preservation
+            enhanced = filtered * (gate_smooth * 0.95 + 0.05)
+            
+            return enhanced
+            
+        except Exception as e:
+            print(f"Lightweight processing failed: {e}")
+            return audio_channel
+    
+    def apply_noise_reduction_to_stereo(self, stereo_audio: np.ndarray, sample_rate: int) -> np.ndarray:
+        """Apply lightweight processing only to left channel"""
+        if len(stereo_audio.shape) != 2 or stereo_audio.shape[0] != 2:
+            raise ValueError(f"Expected stereo audio with shape (2, samples), got {stereo_audio.shape}")
+        
+        print("Applying lightweight noise reduction to left channel (user channel) only...")
+        
+        left_channel = stereo_audio[0]
+        right_channel = stereo_audio[1]
+        
+        denoised_left = self.denoise_audio_channel(left_channel, sample_rate)
+        
+        min_length = min(len(denoised_left), len(right_channel))
+        denoised_left = denoised_left[:min_length]
+        right_channel = right_channel[:min_length]
+        
+        denoised_stereo = np.array([denoised_left, right_channel])
+        
+        print(f"Lightweight noise reduction completed. Output shape: {denoised_stereo.shape}")
+        return denoised_stereo
+
+
+# Smart denoiser that uses DeepFilterNet if available, falls back to lightweight processing
+class SmartDenoiser:
+    """Smart denoiser that automatically chooses the best available method"""
+    
+    def __init__(self):
+        self.denoiser = None
+        self.method_name = "None"
+        
+        # Try to use DeepFilterNet first
+        if DEEPFILTERNET_AVAILABLE:
+            try:
+                self.denoiser = DeepFilterNetDenoiser()
+                self.method_name = "DeepFilterNet"
+            except Exception as e:
+                print(f"Failed to initialize DeepFilterNet: {e}")
+                self.denoiser = None
+        
+        # Fallback to lightweight spectral processing
+        if self.denoiser is None:
+            self.denoiser = LightweightSpectralDenoiser()
+            self.method_name = "Lightweight Spectral"
+        
+        print(f"🎯 Active noise reduction method: {self.method_name}")
+    
+    def denoise_audio_channel(self, audio_channel: np.ndarray, sample_rate: int) -> np.ndarray:
+        """Apply noise reduction to a single audio channel"""
+        return self.denoiser.denoise_audio_channel(audio_channel, sample_rate)
+    
+    def apply_noise_reduction_to_stereo(self, stereo_audio: np.ndarray, sample_rate: int) -> np.ndarray:
+        """Apply noise reduction only to the left channel (user channel) of stereo audio"""
+        return self.denoiser.apply_noise_reduction_to_stereo(stereo_audio, sample_rate)
 
 
 # Global instance for reuse across multiple audio files
 _denoiser_instance = None
 
-def get_denoiser_instance() -> FacebookDenoiser:
-    """Get a singleton instance of the Facebook denoiser"""
+def get_denoiser_instance() -> SmartDenoiser:
+    """Get a singleton instance of the smart denoiser"""
     global _denoiser_instance
     if _denoiser_instance is None:
-        _denoiser_instance = FacebookDenoiser()
+        _denoiser_instance = SmartDenoiser()
     return _denoiser_instance
 
 def apply_noise_reduction(stereo_audio: np.ndarray, sample_rate: int) -> np.ndarray:
@@ -170,3 +252,6 @@ def apply_noise_reduction(stereo_audio: np.ndarray, sample_rate: int) -> np.ndar
     """
     denoiser = get_denoiser_instance()
     return denoiser.apply_noise_reduction_to_stereo(stereo_audio, sample_rate)
+
+# Backward compatibility alias
+FacebookDenoiser = SmartDenoiser

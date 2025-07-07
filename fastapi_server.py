@@ -10,7 +10,6 @@ from url_helper import is_url, download_audio_from_url
 
 # Import Warden modules
 from audio_metrics import AudioMetricsCalculator
-from database import init_db, SessionLocal
 from fastapi.middleware.cors import CORSMiddleware
 
 
@@ -54,10 +53,7 @@ class MetricsResponse(BaseModel):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Initialize database when app starts
-    init_db()
-
-    # Startup: nothing else to do
+    # Startup: nothing to initialize for stateless operation
     yield
 
     # Shutdown: nothing to clean up
@@ -144,56 +140,7 @@ def analyze_batch(audio_files: AudioFileList):
 
             if is_url(path):
                 source_url = path
-                # First check if we already have analysis for this URL
-                db_session = SessionLocal()
-                try:
-                    from database import get_analysis_by_url, recreate_metrics_from_db
-
-                    existing_analysis = get_analysis_by_url(db_session, source_url)
-                    if existing_analysis:
-                        # We already have this URL analyzed
-                        print(f"Found existing analysis for URL: {source_url}")
-                        existing_metrics = recreate_metrics_from_db(existing_analysis)
-                        if existing_metrics:
-                            results.append(
-                                MetricsResponse(
-                                    file_path=path,
-                                    filename=existing_metrics["filename"],
-                                    status="success",
-                                    **{
-                                        k: v
-                                        for k, v in existing_metrics[
-                                            "latency_metrics"
-                                        ].items()
-                                        if v is not None
-                                    },
-                                    **{
-                                        f"vad_{k}": v
-                                        for k, v in existing_metrics[
-                                            "vad_latency_metrics"
-                                        ].items()
-                                        if v is not None
-                                    },
-                                    ai_interrupting_user=existing_metrics.get(
-                                        "ai_interrupting_user"
-                                    ),
-                                    user_interrupting_ai=existing_metrics.get(
-                                        "user_interrupting_ai"
-                                    ),
-                                    talk_ratio=existing_metrics.get("talk_ratio"),
-                                    average_pitch=existing_metrics.get(
-                                        "average_pitch_hz"
-                                    ),
-                                    words_per_minute=existing_metrics.get(
-                                        "words_per_minute"
-                                    ),
-                                )
-                            )
-                            continue
-                finally:
-                    db_session.close()
-
-                # If no existing analysis, download the file
+                # Download the file
                 try:
                     local_file_path = download_audio_from_url(path)
                     print(f"Downloaded to: {local_file_path}")
@@ -388,45 +335,7 @@ async def analyze_batch_stream(audio_files: AudioFileList):
 
                 if is_url(path):
                     source_url = path
-                    # First check if we already have analysis for this URL
-                    db_session = SessionLocal()
-                    try:
-                        from database import get_analysis_by_url, recreate_metrics_from_db
-
-                        existing_analysis = get_analysis_by_url(db_session, source_url)
-                        if existing_analysis:
-                            # We already have this URL analyzed
-                            print(f"Found existing analysis for URL: {source_url}")
-                            existing_metrics = recreate_metrics_from_db(existing_analysis)
-                            if existing_metrics:
-                                result = MetricsResponse(
-                                    file_path=path,
-                                    filename=existing_metrics["filename"],
-                                    status="success",
-                                    **{
-                                        k: v
-                                        for k, v in existing_metrics[
-                                            "latency_metrics"
-                                        ].items()
-                                        if v is not None
-                                    },
-                                    ai_interrupting_user=existing_metrics.get(
-                                        "ai_interrupting_user"
-                                    ),
-                                    user_interrupting_ai=existing_metrics.get(
-                                        "user_interrupting_ai"
-                                    ),
-                                    talk_ratio=existing_metrics.get("talk_ratio"),
-                                    average_pitch=existing_metrics.get("average_pitch"),
-                                    words_per_minute=existing_metrics.get("words_per_minute"),
-                                )
-                                print(f"[{i}/{len(audio_files.file_paths)}] Completed (from cache): {path}")
-                                yield result.model_dump_json() + "\n"
-                                continue
-                    finally:
-                        db_session.close()
-
-                    # If no existing analysis, download the file
+                    # Download the file
                     try:
                         local_file_path = download_audio_from_url(path)
                         print(f"Downloaded to: {local_file_path}")
@@ -440,7 +349,7 @@ async def analyze_batch_stream(audio_files: AudioFileList):
                             status="error",
                             error_message=error_msg,
                         )
-                        print(f"[{i}/{len(audio_files.file_paths)}] Error: {path}")
+                        print(f"[{i}/{len(files_to_process)}] Error: {path}")
                         yield error_result.model_dump_json() + "\n"
                         continue
 

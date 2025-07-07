@@ -5,19 +5,19 @@ from waitress import serve
 import uvicorn
 
 from audio_metrics import AudioMetricsCalculator
-from database import init_db  # Added to initialize DB on startup
 
 
-def process_audio_files(input_dir="stereo_test_calls", output_dir="sampled_test_calls"):
+def process_audio_files(input_dir="stereo_test_calls", output_dir="sampled_test_calls", enable_noise_reduction=False):
     """
     Process all audio files in the input directory
 
     Args:
         input_dir: Directory containing input audio files
         output_dir: Directory to save processed audio files
+        enable_noise_reduction: Whether to enable noise reduction (requires 48kHz upsampling)
     """
-    # Create calculator instance
-    calculator = AudioMetricsCalculator(input_dir, output_dir)
+    # Create calculator instance with noise reduction setting
+    calculator = AudioMetricsCalculator(input_dir, output_dir, enable_noise_reduction=enable_noise_reduction)
 
     # Get list of audio files
     audio_files = [
@@ -173,6 +173,11 @@ def main():
     parser.add_argument(
         "--threads", type=int, default=4, help="Number of Waitress worker threads"
     )
+    parser.add_argument(
+        "--enable-noise-reduction",
+        action="store_true",
+        help="Enable noise reduction on user audio channel (requires upsampling to 48kHz)",
+    )
 
     args = parser.parse_args()
 
@@ -184,8 +189,9 @@ def main():
     # Choose operation mode
     if args.process:
         # Process audio files mode
-        print("Processing audio files")
-        process_audio_files(args.input_dir, args.output_dir)
+        noise_status = "enabled" if args.enable_noise_reduction else "disabled"
+        print(f"Processing audio files (noise reduction {noise_status})")
+        process_audio_files(args.input_dir, args.output_dir, args.enable_noise_reduction)
     elif args.web_only:
         # Start only the Flask web UI
         print(f"Starting Web UI only at http://{args.host}:{args.web_port}")
@@ -203,5 +209,4 @@ def main():
 
 
 if __name__ == "__main__":
-    init_db()  # Initialize the database and create tables if they don't exist
     main()

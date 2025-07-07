@@ -265,32 +265,11 @@ class AudioDownloader:
 
     def check_existing_download_by_url(self, url: str):
         """
-        Check if a URL has already been downloaded by looking in the database.
-        Returns the existing file path if found, None otherwise.
+        Check if a URL has already been downloaded (no database check - stateless operation).
+        Returns None since we're now stateless.
         """
-        try:
-            from database import SessionLocal, get_analysis_by_url
-
-            db_session = SessionLocal()
-            try:
-                existing_analysis = get_analysis_by_url(db_session, url)
-                if existing_analysis and existing_analysis.downsampled_filepath:
-                    # Check if the file actually exists on disk
-                    if os.path.exists(existing_analysis.downsampled_filepath):
-                        logger.info(
-                            f"Found existing download for URL: {url} -> {existing_analysis.downsampled_filepath}"
-                        )
-                        return existing_analysis.downsampled_filepath
-                    else:
-                        logger.warning(
-                            f"Database record exists but file missing: {existing_analysis.downsampled_filepath}"
-                        )
-                return None
-            finally:
-                db_session.close()
-        except Exception as e:
-            logger.warning(f"Error checking for existing download: {e}")
-            return None
+        # No longer checking database for existing downloads - always reprocess
+        return None
 
     def download_audio_from_url(self, url: str, custom_filename: str = None) -> str:
         """

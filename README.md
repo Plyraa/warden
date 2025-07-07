@@ -44,9 +44,13 @@ python warden.py --web-only
 - **Agent Properties Integration**: Fetches agent configuration from JotForm API
 
 ### Noise Reduction
-- **Facebook Denoiser**: Optional noise reduction for user audio channel
+- **DeepFilterNet**: Modern neural network noise reduction for user audio channel
 - **UI Toggle**: Enable/disable noise reduction in the web interface
 - **Channel-Specific**: Only applies to user channel, preserving agent audio quality
+- **Resource Efficient**: 200-400MB RAM usage vs 8GB+ with Facebook Denoiser
+- **Sample Rate Optimized**: Smart processing flow that only upsamples to 48kHz when noise reduction is needed
+  - **Without noise reduction**: `input file → 16kHz (VAD)` - Direct downsampling for faster processing
+  - **With noise reduction**: `input file → 48kHz (noise suppression) → 16kHz (VAD)` - Full pipeline when needed
 
 ## API Endpoints
 
@@ -133,15 +137,12 @@ curl -X POST "http://localhost:8000/batch" \
 - **`audio_metrics.py`** - Core audio analysis engine with latency/overlap detection
 - **`fastapi_server.py`** - FastAPI server providing REST endpoints for batch processing
 - **`web_app.py`** - Flask web interface for interactive file upload and visualization
-- **`database.py`** - SQLite database operations for storing analysis results
 - **`url_helper.py`** - URL processing and remote file download utilities
 - **`visualization.py`** - Chart generation and data visualization components
-- **`update_database.py`** - Database schema migration and update utility
 
 ### Directories
 - **`templates/`** - HTML templates for the web interface
 - **`static/`** - Static assets (images, CSS, JS) for web UI
-- **`database/`** - SQLite database files storage
 - **`stereo_test_calls/`** - Sample stereo audio files for testing (User=Left, AI=Right)
 - **`sampled_test_calls/`** - Downsampled audio files for faster processing
 
@@ -162,14 +163,16 @@ ELEVENLABS_API_KEY=your_api_key_here
 ### Command Line Options
 ```bash
 python warden.py [options]
-  --api-only          # Start only API server
-  --web-only          # Start only Web UI  
-  --host HOST         # Server host (default: 127.0.0.1)
-  --api-port PORT     # API port (default: 8000)
-  --web-port PORT     # Web port (default: 5000)
-  --threads N         # Waitress threads (default: 4)
-  --input-dir DIR     # Audio input directory
-  --output-dir DIR    # Processed audio output directory
+  --process                    # Process audio files instead of starting servers
+  --api-only                   # Start only API server
+  --web-only                   # Start only Web UI  
+  --host HOST                  # Server host (default: 127.0.0.1)
+  --api-port PORT              # API port (default: 8000)
+  --web-port PORT              # Web port (default: 5000)
+  --threads N                  # Waitress threads (default: 4)
+  --input-dir DIR              # Audio input directory
+  --output-dir DIR             # Processed audio output directory
+  --enable-noise-reduction     # Enable noise reduction (requires 48kHz upsampling)
 ```
 
 ## Architecture

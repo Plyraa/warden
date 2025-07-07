@@ -10,14 +10,11 @@ from flask import Flask, jsonify, render_template, request, send_from_directory
 
 from audio_metrics import AudioMetricsCalculator
 from visualization import AudioVisualizer
-from database import init_db  # Ensure DB is initialized if web_app is run directly
 
 # Create application instance
 app = Flask(__name__)
 
-# Initialize DB when app starts
-# This is done when the WSGI application loads
-init_db()
+# No database initialization needed for stateless operation
 
 
 # Configure templates and static files

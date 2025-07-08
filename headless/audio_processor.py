@@ -44,30 +44,27 @@ class AudioProcessor:
         else:
             return self.vad_model, self.get_speech_timestamps
 
-    def downsample_audio(self, input_path, target_sr=16000):
-        """Downsample stereo audio file to target sample rate and return left and right channels"""
-        # Check if input_file is an absolute path
-
+    def load_and_process_audio(self, input_path):
+        """Load audio file, apply noise reduction at 48k, then downsample to 16k for VAD"""
         if not os.path.exists(input_path):
             raise FileNotFoundError(f"Input file not found: {input_path}")
 
         base_filename = os.path.basename(input_path)
-
         output_filename = (
-            os.path.splitext(base_filename)[0] + "_downsampled" + os.path.splitext(base_filename)[1]
+            os.path.splitext(base_filename)[0] + "_processed" + os.path.splitext(base_filename)[1]
         )
         output_path = os.path.join(self.audio_dir, output_filename)
 
         if os.path.exists(output_path):
-            print(f"Removing existing downsampled file for fresh processing: {output_path}")
+            print(f"Removing existing processed file for fresh processing: {output_path}")
             os.remove(output_path)
 
         file_extension = os.path.splitext(input_path)[1].lower()
         
         try:
+            # Step 1: Load original audio file
             if file_extension == ".mp3":
                 print(f"Loading MP3 file: {input_path}")
-                # Use pydub for MP3 files
                 audio_segment = AudioSegment.from_mp3(input_path)
                 
                 # Ensure stereo
@@ -75,46 +72,62 @@ class AudioProcessor:
                     print("Converting mono to stereo")
                     audio_segment = audio_segment.set_channels(2)
 
-                # Resample if necessary
-                if audio_segment.frame_rate != target_sr:
-                    print(f"Resampling from {audio_segment.frame_rate}Hz to {target_sr}Hz")
-                    audio_segment = audio_segment.set_frame_rate(target_sr)
-
-                print(f"Exporting to: {output_path}")
-                audio_segment.export(output_path, format="mp3")
-                
-                # Load with librosa for return value
-                audio, sr = librosa.load(output_path, sr=target_sr, mono=False)
-                if len(audio.shape) == 1:
-                    audio = np.array([audio, audio])
-                elif audio.shape[0] != 2 and audio.shape[1] == 2:
-                    audio = audio.T
+                # Get original sample rate and convert to numpy
+                original_sr = audio_segment.frame_rate
+                audio_data = np.array(audio_segment.get_array_of_samples())
+                if audio_segment.channels == 2:
+                    audio_data = audio_data.reshape((-1, 2)).T
+                else:
+                    audio_data = np.array([audio_data, audio_data])
+                audio = audio_data.astype(np.float32) / 32768.0  # Convert to float
 
             elif file_extension == ".wav":
                 print(f"Loading WAV file: {input_path}")
-                audio, sr = librosa.load(input_path, sr=None, mono=False)
+                audio, original_sr = librosa.load(input_path, sr=None, mono=False)
                 
                 # If audio is mono, duplicate to create stereo
                 if len(audio.shape) == 1:
                     audio = np.array([audio, audio])
                 elif audio.shape[0] != 2 and audio.shape[1] == 2:
                     audio = audio.T
-
-                # Resample if necessary
-                if sr != target_sr:
-                    print(f"Resampling from {sr}Hz to {target_sr}Hz")
-                    audio = librosa.resample(audio, orig_sr=sr, target_sr=target_sr)
-
-                # Save downsampled audio
-                print(f"Saving to: {output_path}")
-                sf.write(output_path, audio.T, target_sr)
             else:
                 raise ValueError(f"Unsupported file format: {file_extension}")
 
-            return audio, target_sr, output_path
+            print(f"Original audio loaded: {original_sr}Hz, shape: {audio.shape}")
+
+            # Step 2: Resample to 48kHz for noise reduction (DeepFilterNet requirement)
+            noise_reduction_sr = 48000
+            if original_sr != noise_reduction_sr:
+                print(f"Resampling from {original_sr}Hz to {noise_reduction_sr}Hz for noise reduction")
+                audio_48k = librosa.resample(audio, orig_sr=original_sr, target_sr=noise_reduction_sr)
+            else:
+                audio_48k = audio.copy()
+
+            # Step 3: Apply noise reduction at 48kHz
+            print("Applying noise reduction to user channel at 48kHz...")
+            try:
+                audio_denoised = apply_noise_reduction(audio_48k, noise_reduction_sr)
+                print("Noise reduction completed successfully")
+            except Exception as e:
+                print(f"Warning: Noise reduction failed, continuing with original audio: {e}")
+                audio_denoised = audio_48k
+
+            # Step 4: Downsample to 16kHz for VAD processing
+            vad_sr = 16000
+            if noise_reduction_sr != vad_sr:
+                print(f"Downsampling from {noise_reduction_sr}Hz to {vad_sr}Hz for VAD processing")
+                audio_final = librosa.resample(audio_denoised, orig_sr=noise_reduction_sr, target_sr=vad_sr)
+            else:
+                audio_final = audio_denoised
+
+            # Step 5: Save the final processed audio
+            print(f"Saving processed audio to: {output_path}")
+            sf.write(output_path, audio_final.T, vad_sr)
+
+            return audio_final, vad_sr, output_path
 
         except Exception as e:
-            print(f"ERROR in downsampling: {str(e)}")
+            print(f"ERROR in audio processing: {str(e)}")
             raise
 
     def detect_speech_silero_vad(self, audio_channel, sr):
@@ -122,9 +135,9 @@ class AudioProcessor:
         start_time = time.time()
         print("Starting Silero VAD speech detection...")
 
-        # Resample to 16kHz if needed
+        # Ensure audio is at expected 16kHz sample rate
         if sr != self.sampling_rate:
-            print(f"Resampling audio from {sr}Hz to {self.sampling_rate}Hz for VAD")
+            print(f"Warning: Expected {self.sampling_rate}Hz but got {sr}Hz. This shouldn't happen with the new processing flow.")
             audio_channel = librosa.resample(
                 audio_channel, orig_sr=sr, target_sr=self.sampling_rate
             )
@@ -627,16 +640,8 @@ class AudioProcessor:
         try:
             print(f"Processing file: {filename}")
             
-            # Downsample audio file
-            audio, sr, output_path = self.downsample_audio(filename)
-
-            # Apply noise reduction to left channel (user channel) only
-            print("Applying noise reduction to user channel...")
-            try:
-                audio = apply_noise_reduction(audio, sr)
-                print("Noise reduction completed successfully")
-            except Exception as e:
-                print(f"Warning: Noise reduction failed, continuing with original audio: {e}")
+            # Load, apply noise reduction at 48k, and downsample to 16k for VAD
+            audio, sr, output_path = self.load_and_process_audio(filename)
 
             # Process user channel with Silero VAD
             print("Processing user channel with Silero VAD...")
@@ -682,7 +687,7 @@ class AudioProcessor:
             metrics = {
                 "filename": os.path.basename(filename),
                 "original_path": filename,
-                "downsampled_path": output_path,
+                "processed_path": output_path,
                 "combined_speaker_turns": detailed_timeline,  # Use the detailed timeline
                 "user_vad_segments": user_speech_turns,
                 "agent_vad_segments": agent_speech_turns,

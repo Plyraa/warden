@@ -32,7 +32,7 @@ class DeepFilterNetDenoiser:
         self.df_state = None
         self.sr = 48000  # DeepFilterNet works at 48kHz
         self.model_base_dir = model_base_dir
-        print("Initialized DeepFilterNet denoiser (RAM usage: 200-400MB)")
+        print("Initialized DeepFilterNet denoiser")
         
     def load_model(self):
         """Load DeepFilterNet model"""

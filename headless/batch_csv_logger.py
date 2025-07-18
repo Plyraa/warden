@@ -17,7 +17,7 @@ from typing import List, Dict, Any
 # Configuration
 API_BASE = "http://localhost:8030"
 # TODO: Update this to your actual audio files directory
-AUDIO_FILES_DIR = r"C:\Users\Plyra\Downloads\high_lat"
+AUDIO_FILES_DIR = r"C:\Users\ArdAlp\Desktop\jform\warden\headless\setup"
 # TODO: Update this to your actual input CSV file path
 INPUT_CSV = "test_input.csv"
 OUTPUT_DIR = "csv_outputs"

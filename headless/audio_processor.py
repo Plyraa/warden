@@ -14,6 +14,7 @@ import constants
 from typing import Dict, Any, List, Tuple, Optional
 from scipy.signal import find_peaks
 from noise_reduction import apply_noise_reduction
+from echo_detection import process_audio_for_echo
 
 class AudioProcessor:
     def __init__(self, audio_dir: Path):
@@ -21,6 +22,11 @@ class AudioProcessor:
         self.vad_model = None
         self.get_speech_timestamps = None
         self.audio_dir = audio_dir
+        self.echo_detection_params = {
+            'reduction_threshold': 0.5, 
+            'correlation_threshold': 0.02
+        }
+        self.echo_merge_gap_seconds = 1.5
 
     def get_vad_model(self):
         """Get Silero VAD model and utility functions"""
@@ -643,6 +649,30 @@ class AudioProcessor:
             # Load, apply noise reduction at 48k, and downsample to 16k for VAD
             audio, sr, output_path = self.load_and_process_audio(filename)
 
+            # --- Echo Detection ---
+            # Run echo detection on the processed (denoised) file
+            echo_output_dir = self.audio_dir / "echo_cancelled"
+            echo_output_dir.mkdir(exist_ok=True)
+            
+            # Manually set the merge gap for the echo detection logic
+            from echo_detection import _merge_echo_segments
+            
+            echo_data = process_audio_for_echo(output_path, echo_output_dir, params=self.echo_detection_params)
+            
+            if echo_data and echo_data.get("echo_segments"):
+                raw_echo_segments = echo_data["echo_segments"]
+                # Manually merge with the desired gap
+                merged_echo_segments = _merge_echo_segments(raw_echo_segments, max_gap_seconds=self.echo_merge_gap_seconds)
+                total_echo_duration = sum(seg['end'] - seg['start'] for seg in merged_echo_segments)
+            else:
+                merged_echo_segments = []
+                total_echo_duration = 0.0
+            
+            print(f"Total echo duration: {total_echo_duration:.2f}s")
+            for i, seg in enumerate(merged_echo_segments):
+                print(f"  - Echo Segment {i+1}: {seg['start']:.2f}s - {seg['end']:.2f}s")
+
+
             # Process user channel with Silero VAD
             print("Processing user channel with Silero VAD...")
             raw_user_vad_segments = self.detect_speech_silero_vad(audio[0], sr)
@@ -658,6 +688,11 @@ class AudioProcessor:
             user_segments = self._normalize_segments(raw_user_vad_segments, "user")
             agent_segments = self._normalize_segments(raw_agent_vad_segments, "ai_agent")
             
+            # --- Heavy Echo Analysis ---
+            heavy_echo_segments = self._detect_heavy_echo_events(agent_segments, user_segments, merged_echo_segments)
+            has_heavy_echo = bool(heavy_echo_segments)
+            has_light_echo = total_echo_duration > 4.0 and not has_heavy_echo
+
             # Create the detailed overlap-aware timeline
             detailed_timeline = self._create_overlap_aware_timeline(user_segments, agent_segments)
             
@@ -688,6 +723,11 @@ class AudioProcessor:
                 "filename": os.path.basename(filename),
                 "original_path": filename,
                 "processed_path": output_path,
+                "hasHeavyEcho": has_heavy_echo,
+                "hasLightEcho": has_light_echo,
+                "total_echo_duration": total_echo_duration,
+                "echo_segments": merged_echo_segments,
+                "heavy_echo_segments": heavy_echo_segments,
                 "combined_speaker_turns": detailed_timeline,  # Use the detailed timeline
                 "user_vad_segments": user_speech_turns,
                 "agent_vad_segments": agent_speech_turns,
@@ -723,3 +763,45 @@ class AudioProcessor:
         latency_stats.update(overlap_stats)
 
         return latency_stats, latency_details
+
+    def _detect_heavy_echo_events(self, agent_vad_segments, user_vad_segments, echo_segments, min_overlap_duration=0.3):
+        """
+        Detects if an agent's turn was likely terminated by its own echo.
+        This happens if an echo segment overlaps with a VAD-detected user segment,
+        and the agent's speech ends during this false user segment.
+        Returns a list of segments that triggered the heavy echo.
+        """
+        if not agent_vad_segments or not user_vad_segments or not echo_segments:
+            return []
+
+        heavy_echo_events = []
+
+        # Step 1: Find where echo segments create "false user speech"
+        false_user_speech_segments = []
+        for echo_seg in echo_segments:
+            for user_seg in user_vad_segments:
+                # Calculate the overlap between an echo and a user VAD segment
+                overlap_start = max(echo_seg["start"], user_seg["start"])
+                overlap_end = min(echo_seg["end"], user_seg["end"])
+                
+                if overlap_start < overlap_end:
+                    overlap_duration = overlap_end - overlap_start
+                    if overlap_duration >= min_overlap_duration:
+                        false_user_speech_segments.append({"start": overlap_start, "end": overlap_end})
+
+        if not false_user_speech_segments:
+            return []
+
+        # Step 2: Check if any agent turn ends during one of these false segments
+        for agent_seg in agent_vad_segments:
+            for false_seg in false_user_speech_segments:
+                # Check if the agent's speech ends within the false user segment (with a small buffer)
+                if false_seg["start"] <= agent_seg["end"] < (false_seg["end"] + 0.25):
+                    event_details = {
+                        "agent_turn_end_time": agent_seg["end"],
+                        "triggering_false_user_segment": false_seg
+                    }
+                    print(f"DEBUG: Heavy echo detected! Agent turn ended at {agent_seg['end']:.2f}s during a false user speech event from {false_seg['start']:.2f}s to {false_seg['end']:.2f}s.")
+                    heavy_echo_events.append(event_details)
+
+        return heavy_echo_events

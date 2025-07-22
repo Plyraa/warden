@@ -8,7 +8,8 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 
-from schemas import AudioFileList, MetricsResponse, HealthResponse, BatchMetricsResponse
+from schemas import AnalysisResult, AnalysisStatus
+from noise_detection import detect_noise
 from audio_processor import AudioProcessor
 from url_downloader import URLDownloader
 from llm_evaluator import LlmEvaluator, LlmEvaluationResult
@@ -153,6 +154,10 @@ class VoiceAgentEvaluatorService:
                     talk_ratio=metrics.get("talk_ratio", 0),
                     average_pitch=metrics.get("average_pitch", 0),
                     words_per_minute=metrics.get("words_per_minute", 0),
+                    hasEcho=metrics.get("hasEcho", False),
+                    echoInterrupt=metrics.get("echoInterrupt", False),
+                    hasNoise=metrics.get("hasNoise", False),
+                    noiseInterrupt=metrics.get("noiseInterrupt", False),
                     personaAdherence=llm_evaluation.personaAdherence if llm_evaluation else None,
                     languageSwitch=llm_evaluation.languageSwitch if llm_evaluation else None,
                     sentiment=llm_evaluation.sentiment if llm_evaluation else None,
@@ -228,23 +233,8 @@ class VoiceAgentEvaluatorService:
                     filename = os.path.basename(local_file_path)
                     logger.info(f"Processing file: {filename}")
                     
-                    # Run the processor in a thread pool to avoid blocking
-                    loop = asyncio.get_event_loop()
-                    metrics = await loop.run_in_executor(None, self.processor.process_file, local_file_path)
-
-                    # Run LLM evaluation
-                    llm_evaluation = None
-                    if self.llm_evaluator is None:
-                        logger.warning(f"LLM Evaluator not available, skipping evaluation for {filename}")
-                    else:
-                        try:
-                            logger.info(f"Starting LLM evaluation for {filename} with agent_id {agent_id}")
-                            llm_evaluation = await loop.run_in_executor(None, self.llm_evaluator.run_evaluation, local_file_path, agent_id)
-                            logger.info(f"LLM evaluation completed successfully for {filename}")
-                        except Exception as e:
-                            logger.error(f"LLM evaluation failed for {path}: {e}")
-                            logger.error(f"Full traceback: {traceback.format_exc()}")
-                            # Continue processing without LLM evaluation
+                    # Run analysis
+                    metrics = self.processor.process_file(local_file_path)
 
                     # Extract latency points
                     latency_points = []
@@ -257,7 +247,7 @@ class VoiceAgentEvaluatorService:
 
                                 latency_points.append({
                                     "latency_ms": latency_ms,
-                                    "moment": point["from_turn_end"],  # Fixed: Mark start of latency period
+                                    "moment": point["from_turn_end"]
                                 })
 
                     # Extract metrics
@@ -268,11 +258,22 @@ class VoiceAgentEvaluatorService:
                     ai_user_overlap_count = 0
                     user_ai_overlap_count = 0
                     overlaps = overlap_data.get("overlaps", [])
+                    
                     for overlap in overlaps:
                         if overlap.get("interrupter") == "ai_agent":
                             ai_user_overlap_count += 1
                         elif overlap.get("interrupter") == "user":
                             user_ai_overlap_count += 1
+                    
+                    llm_evaluation = None
+                    if self.llm_evaluator is not None:
+                        try:
+                            logger.info(f"Starting LLM evaluation for {filename} with agent_id {agent_id}")
+                            llm_evaluation = await loop.run_in_executor(None, self.llm_evaluator.run_evaluation, local_file_path, agent_id)
+                            logger.info(f"LLM evaluation completed successfully for {filename}")
+                        except Exception as e:
+                            logger.error(f"LLM evaluation failed for {path}: {e}")
+                            logger.error(f"Full traceback: {traceback.format_exc()}")
 
                     # Create successful response
                     result = MetricsResponse(
@@ -292,6 +293,10 @@ class VoiceAgentEvaluatorService:
                         talk_ratio=metrics.get("talk_ratio", 0),
                         average_pitch=metrics.get("average_pitch", 0),
                         words_per_minute=metrics.get("words_per_minute", 0),
+                        hasEcho=metrics.get("hasEcho", False),
+                        echoInterrupt=metrics.get("echoInterrupt", False),
+                        hasNoise=metrics.get("hasNoise", False),
+                        noiseInterrupt=metrics.get("noiseInterrupt", False),
                         personaAdherence=llm_evaluation.personaAdherence if llm_evaluation else None,
                         languageSwitch=llm_evaluation.languageSwitch if llm_evaluation else None,
                         sentiment=llm_evaluation.sentiment if llm_evaluation else None,

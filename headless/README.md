@@ -18,7 +18,7 @@ python app.py
 - **Streaming Batch Processing**: Get results as files complete via `/batch-stream`
 - **Standard Batch Processing**: Process multiple files via `/batch`
 - **URL Support**: Download and process remote audio files
-- **Audio Metrics**: Latency, overlap detection, talk ratio, pitch analysis
+- **Audio Metrics**: Latency, overlap detection, talk ratio, pitch analysis, noise and echo detection
 - **Production Ready**: CORS enabled, structured logging, error handling
 - **Zero Dependencies**: No database, no external services required
 
@@ -86,7 +86,11 @@ Each processed file returns:
   "user_ai_overlap_count": 3,
   "talk_ratio": 2.5,
   "average_pitch": 180.5,
-  "words_per_minute": 150.2
+  "words_per_minute": 150.2,
+  "hasNoise": false,
+  "noiseInterrupt": false,
+  "hasEcho": false,
+  "echoInterrupt": false
 }
 ```
 
@@ -109,6 +113,10 @@ Each processed file returns:
 | `talk_ratio` | Ratio of AI to user speaking time |
 | `average_pitch` | Average pitch in Hz |
 | `words_per_minute` | Speaking rate calculation |
+| `hasNoise` | Boolean: Noise was detected |
+| `noiseInterrupt` | Boolean: Noise interrupted the agent |
+| `hasEcho` | Boolean: Echo was detected |
+| `echoInterrupt` | Boolean: Echo interrupted the agent |
 
 ## 🛠 Configuration
 

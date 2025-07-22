@@ -25,20 +25,31 @@ class AudioVisualizer:
         """
         # Load audio
         y, sr = librosa.load(audio_path, sr=None, mono=False)
-        duration = librosa.get_duration(y=y, sr=sr)
+        
+        # Handle both mono and stereo audio
+        if y.ndim == 1:
+            # Convert mono to stereo by duplicating the channel
+            y = np.array([y, y])
+        
+        # Calculate duration more precisely
+        duration = y.shape[1] / sr
 
         # Create plot with two subplots (one for each channel)
         fig, axes = plt.subplots(2, 1, figsize=(12, 6), sharex=True)
 
-        # Time values for x-axis
-        times = np.linspace(0, duration, y.shape[1])
+        # Time values for x-axis - create precise time array
+        times = np.arange(y.shape[1]) / sr
 
         # Plot left channel (user)
         axes[0].plot(times, y[0], color="blue", alpha=0.6)
         axes[0].set_title("Left Channel (User)")
 
         # Highlight user speaking intervals
-        for start, end in user_windows:
+        for segment in user_windows:
+            if isinstance(segment, dict):
+                start, end = segment['start'], segment['end']
+            else:
+                start, end = segment
             axes[0].axvspan(start, end, color="blue", alpha=0.2)
 
         # Plot right channel (agent)
@@ -46,11 +57,19 @@ class AudioVisualizer:
         axes[1].set_title("Right Channel (AI Agent)")
 
         # Highlight agent speaking intervals
-        for start, end in agent_windows:
+        for segment in agent_windows:
+            if isinstance(segment, dict):
+                start, end = segment['start'], segment['end']
+            else:
+                start, end = segment
             axes[1].axvspan(start, end, color="green", alpha=0.2)
 
         # Set common x-axis label
         axes[1].set_xlabel("Time (seconds)")
+        
+        # Set x-axis limits to match the actual duration
+        for ax in axes:
+            ax.set_xlim(0, duration)
 
         # Set common y-axis label
         fig.text(0.04, 0.5, "Amplitude", va="center", rotation="vertical")
@@ -376,6 +395,37 @@ class AudioVisualizer:
             </div>
             
             <div class="metrics-section">
+                <h4>Audio Quality Metrics</h4>
+                <table class="metrics-table">
+                    <tr>
+                        <th>Metric</th>
+                        <th>Value</th>
+                        <th>Description</th>
+                    </tr>
+                    <tr>
+                        <td>Has Noise</td>
+                        <td>{}</td>
+                        <td>Whether background noise is detected in the audio</td>
+                    </tr>
+                    <tr>
+                        <td>Noise Interrupt</td>
+                        <td>{}</td>
+                        <td>Whether noise interruptions occurred during conversation</td>
+                    </tr>
+                    <tr>
+                        <td>Has Echo</td>
+                        <td>{}</td>
+                        <td>Whether echo artifacts are detected in the audio</td>
+                    </tr>
+                    <tr>
+                        <td>Echo Interrupt</td>
+                        <td>{}</td>
+                        <td>Whether echo interruptions occurred during conversation</td>
+                    </tr>
+                </table>
+            </div>
+            
+            <div class="metrics-section">
                 <h4>LLM Evaluation Metrics</h4>
                 <table class="metrics-table">
                     <tr>
@@ -421,6 +471,11 @@ class AudioVisualizer:
             metrics["talk_ratio"],
             metrics["average_pitch"],
             metrics["words_per_minute"],
+            # Audio quality metrics
+            'Yes' if metrics.get('hasNoise') else 'No',
+            'Yes' if metrics.get('noiseInterrupt') else 'No',
+            'Yes' if metrics.get('hasEcho') else 'No',
+            'Yes' if metrics.get('echoInterrupt') else 'No',
             # LLM evaluation metrics
             f"{metrics.get('personaAdherence', 'N/A')}/5" if metrics.get('personaAdherence') else "Not evaluated",
             "Yes" if metrics.get('languageSwitch') else "No" if metrics.get('languageSwitch') is not None else "Not evaluated",

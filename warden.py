@@ -5,6 +5,8 @@ from waitress import serve
 import uvicorn
 
 from audio_metrics import AudioMetricsCalculator
+from noise_detection import detect_noise
+
 
 
 def process_audio_files(input_dir="stereo_test_calls", output_dir="sampled_test_calls", enable_noise_reduction=False):
@@ -37,6 +39,11 @@ def process_audio_files(input_dir="stereo_test_calls", output_dir="sampled_test_
         # Calculate metrics
         metrics = calculator.process_file(filename)
 
+        # Detect noise
+        noise_results = detect_noise(os.path.join(input_dir, filename))
+        metrics['hasNoise'] = noise_results.get('hasNoise')
+        metrics['noiseInterrupt'] = noise_results.get('noiseInterrupt')
+
         # Print summary of metrics
         print_metrics_summary(metrics)
 
@@ -50,7 +57,7 @@ def print_metrics_summary(metrics):
     print(f"Downsampled to: {metrics['downsampled_path']}")
 
     # Latency metrics
-    latency = metrics["latency_metrics"]
+    latency = metrics["vad_latency_metrics"]
     print(f"Average Latency: {latency['avg_latency']:.2f} ms")
     print(
         f"P10/P50/P90 Latency: {latency['p10_latency']:.2f}/{latency['p50_latency']:.2f}/{latency['p90_latency']:.2f} ms"
@@ -64,8 +71,8 @@ def print_metrics_summary(metrics):
     print(f"Words Per Minute: {metrics['words_per_minute']:.2f} WPM")
 
     # Count of speech segments
-    print(f"User Speech Segments: {len(metrics['user_windows'])}")
-    print(f"Agent Speech Segments: {len(metrics['agent_windows'])}")
+    print(f"User Speech Segments: {len(metrics['user_vad_segments'])}")
+    print(f"Agent Speech Segments: {len(metrics['agent_vad_segments'])}")
 
     # Transcript
     if metrics.get("transcript_data") and metrics["transcript_data"].get("dialog"):

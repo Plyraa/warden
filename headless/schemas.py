@@ -47,8 +47,12 @@ class MetricsResponse(BaseModel):
     ai_user_overlap_count: int = 0
     user_ai_overlap_count: int = 0
     talk_ratio: float = 0.0
-    average_pitch: float = 0.0
-    words_per_minute: float = 0.0
+    average_pitch: float
+    words_per_minute: float
+    hasEcho: bool = False
+    echoInterrupt: bool = False
+    hasNoise: bool = False
+    noiseInterrupt: bool = False
     # LLM Evaluation Metrics
     personaAdherence: Optional[int] = Field(None, description="Adherence to the specified persona, from 1 to 5.", ge=1, le=5)
     languageSwitch: Optional[bool] = Field(None, description="Whether the agent switched languages.")

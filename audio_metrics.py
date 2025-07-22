@@ -7,6 +7,8 @@ from elevenlabs import ElevenLabs
 import traceback  # Added for error logging
 import torch  # For Silero VAD
 import time  # For timing the VAD processing
+from echo_detection import detect_echo
+from noise_detection import detect_noise
 
 # New LLM evaluation and noise reduction imports
 try:
@@ -50,9 +52,9 @@ class AudioMetricsCalculator:
         if LLM_EVALUATOR_AVAILABLE and not batch_only:
             try:
                 self.llm_evaluator = LlmEvaluator()
-                print("✅ LLM Evaluator initialized successfully")
+                print("LLM Evaluator initialized successfully")
             except Exception as e:
-                print(f"❌ Failed to initialize LLM Evaluator: {e}")
+                print(f"Failed to initialize LLM Evaluator: {e}")
                 self.llm_evaluator = None
         
         # Skip ElevenLabs initialization in batch-only mode
@@ -1787,6 +1789,18 @@ class AudioMetricsCalculator:
             "languageSwitch": llm_evaluation.languageSwitch if llm_evaluation else None,
             "sentiment": llm_evaluation.sentiment if llm_evaluation else None,
         }
+        
+        # Detect echo
+        print("Running echo detection...")
+        echo_result = detect_echo(output_path, apply_noise_reduction=False) # Noise reduction already applied
+        metrics["hasEcho"] = echo_result.get("hasEcho", False)
+        metrics["echoInterrupt"] = echo_result.get("echoInterrupt", False)
+
+        # Detect noise
+        print("Running noise detection...")
+        noise_result = detect_noise(output_path)
+        metrics["hasNoise"] = noise_result.get("hasNoise", False)
+        metrics["noiseInterrupt"] = noise_result.get("noiseInterrupt", False)
         
         print(f"Analysis completed for {base_filename} - returning metrics.")
         return metrics

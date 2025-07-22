@@ -45,6 +45,10 @@ class MetricsResponse(BaseModel):
     talk_ratio: float = 0.0
     average_pitch: float = 0.0
     words_per_minute: float = 0.0
+    hasEcho: bool = False
+    echoInterrupt: bool = False
+    hasNoise: bool = False
+    noiseInterrupt: bool = False
     # LLM Evaluation metrics
     personaAdherence: int = None
     languageSwitch: bool = None  
@@ -265,6 +269,10 @@ def analyze_batch(audio_files: AudioFileList):
                 talk_ratio=metrics.get("talk_ratio", 0),
                 average_pitch=metrics.get("average_pitch", 0),
                 words_per_minute=metrics.get("words_per_minute", 0),
+                hasEcho=metrics.get("hasEcho", False),
+                echoInterrupt=metrics.get("echoInterrupt", False),
+                hasNoise=metrics.get("hasNoise", False),
+                noiseInterrupt=metrics.get("noiseInterrupt", False),
                 # LLM Evaluation metrics
                 personaAdherence=metrics.get("personaAdherence"),
                 languageSwitch=metrics.get("languageSwitch"),
@@ -430,6 +438,10 @@ async def analyze_batch_stream(audio_files: AudioFileList):
                     talk_ratio=metrics.get("talk_ratio", 0),
                     average_pitch=metrics.get("average_pitch", 0),
                     words_per_minute=metrics.get("words_per_minute", 0),
+                    hasEcho=metrics.get("hasEcho", False),
+                    echoInterrupt=metrics.get("echoInterrupt", False),
+                    hasNoise=metrics.get("hasNoise", False),
+                    noiseInterrupt=metrics.get("noiseInterrupt", False),
                     # LLM Evaluation metrics
                     personaAdherence=metrics.get("personaAdherence"),
                     languageSwitch=metrics.get("languageSwitch"),

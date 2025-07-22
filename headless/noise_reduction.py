@@ -15,10 +15,10 @@ try:
     from df.utils import download_file
     import soundfile as sf
     DEEPFILTERNET_AVAILABLE = True
-    print("✅ DeepFilterNet available - Using efficient neural denoiser")
+    print("DeepFilterNet available - Using efficient neural denoiser")
 except ImportError:
     DEEPFILTERNET_AVAILABLE = False
-    print("❌ DeepFilterNet not available. Install with: pip install deepfilternet")
+    print("DeepFilterNet not available. Install with: pip install deepfilternet")
     print("Falling back to lightweight spectral processing")
 
 class DeepFilterNetDenoiser:
@@ -218,7 +218,7 @@ class SmartDenoiser:
             self.denoiser = LightweightSpectralDenoiser()
             self.method_name = "Lightweight Spectral"
         
-        print(f"🎯 Active noise reduction method: {self.method_name}")
+        print(f"Active noise reduction method: {self.method_name}")
     
     def denoise_audio_channel(self, audio_channel: np.ndarray, sample_rate: int) -> np.ndarray:
         """Apply noise reduction to a single audio channel"""

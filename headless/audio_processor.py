@@ -14,6 +14,8 @@ import constants
 from typing import Dict, Any, List, Tuple, Optional
 from scipy.signal import find_peaks
 from noise_reduction import apply_noise_reduction
+from echo_detection import detect_echo
+from noise_detection import detect_noise
 
 class AudioProcessor:
     def __init__(self, audio_dir: Path):
@@ -678,6 +680,14 @@ class AudioProcessor:
             # Calculate VAD-based latency metrics using the detailed timeline
             vad_latency_metrics, vad_latency_details = self.calculate_latency_from_timeline(detailed_timeline)
 
+            # Detect echo
+            print("Running echo detection...")
+            echo_result = detect_echo(output_path, apply_noise_reduction=False) # Noise reduction already applied
+
+            # Detect noise
+            print("Running noise detection...")
+            noise_result = detect_noise(output_path)
+
             # Calculate overlap detection
             overlap_data = self.detect_overlaps_from_vad_segments(
                 raw_user_vad_segments, raw_agent_vad_segments
@@ -699,6 +709,10 @@ class AudioProcessor:
                 "talk_ratio": self.calculate_talk_ratio(user_speech_turns, agent_speech_turns),
                 "average_pitch": self.calculate_average_pitch(audio, sr),
                 "words_per_minute": self.calculate_words_per_minute(audio, sr, agent_speech_turns),
+                "hasEcho": echo_result.get("hasEcho", False),
+                "echoInterrupt": echo_result.get("echoInterrupt", False),
+                "hasNoise": noise_result.get("hasNoise", False),
+                "noiseInterrupt": noise_result.get("noiseInterrupt", False),
             }
 
             print(f"Successfully processed: {filename}")

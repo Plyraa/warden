@@ -28,7 +28,7 @@ python warden.py --web-only
 
 - **Real-time Streaming**: Process multiple files with live results via `/batch-stream`
 - **Batch Processing**: Analyze multiple files at once via `/batch`
-- **Audio Metrics**: Latency, overlap detection, talk ratio, pitch, WPM
+- **Audio Metrics**: Latency, overlap detection, talk ratio, pitch, WPM, noise and echo detection
 - **Transcription**: Speech-to-text with overlap analysis (ElevenLabs API)
 - **LLM Evaluation** (NEW): AI agent persona adherence, language consistency, and user sentiment analysis
 - **Noise Reduction** (NEW): Optional Facebook Denoiser for cleaner user audio
@@ -109,7 +109,11 @@ curl -X POST "http://localhost:8000/batch" \
   "user_ai_overlap_count": 4,
   "talk_ratio": 4.734426229508204,
   "average_pitch": 320.99127197265625,
-  "words_per_minute": 206.37119113573402
+  "words_per_minute": 206.37119113573402,
+  "hasNoise": false,
+  "noiseInterrupt": false,
+  "hasEcho": false,
+  "echoInterrupt": false
 }
 ```
 
@@ -129,6 +133,10 @@ curl -X POST "http://localhost:8000/batch" \
 - `talk_ratio`: Ratio of user speech time to AI speech time
 - `average_pitch`: Mean pitch frequency (Hz)
 - `words_per_minute`: Speech rate calculation
+- `hasNoise`: Boolean indicating if noise was detected
+- `noiseInterrupt`: Boolean indicating if noise interrupted the agent
+- `hasEcho`: Boolean indicating if echo was detected
+- `echoInterrupt`: Boolean indicating if echo interrupted the agent
 
 ## Project Structure
 

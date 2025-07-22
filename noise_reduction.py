@@ -15,7 +15,7 @@ try:
     from df.utils import download_file
     import soundfile as sf
     DEEPFILTERNET_AVAILABLE = True
-    print("✅ DeepFilterNet available - Using efficient neural denoiser")
+    print("DeepFilterNet available - Using efficient neural denoiser")
 except ImportError:
     DEEPFILTERNET_AVAILABLE = False
     print("❌ DeepFilterNet not available. Install with: pip install deepfilternet")

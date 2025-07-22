@@ -26,7 +26,7 @@ class LlmEvaluator:
         if not elevenlabs_key:
             raise ValueError("ELEVENLABS_API_KEY not found in environment variables")
             
-        print(f"✅ Initializing LLM Evaluator with API keys present")
+        print(f"Initializing LLM Evaluator with API keys present")
         
         self.openai_client = OpenAI(base_url="https://dev.jotform.ai/openai/v1", api_key=openai_key)
         self.elevenlabs_client = ElevenLabs(api_key=elevenlabs_key)
@@ -40,7 +40,7 @@ class LlmEvaluator:
         prompts_file = os.path.join(os.path.dirname(__file__), "prompts.yaml")
         with open(prompts_file, 'r', encoding='utf-8') as file:
             prompts = yaml.safe_load(file)
-            print("✅ Evaluation prompts loaded from YAML file")
+            print("Evaluation prompts loaded from YAML file")
             return prompts
 
     def get_agent_properties(self, agent_id: str) -> Dict[str, Any]:
@@ -73,7 +73,7 @@ class LlmEvaluator:
         for prop in properties_list:
             agent_properties[prop['prop']] = prop['value']
         
-        print("✅ Agent properties fetched successfully:")
+        print("Agent properties fetched successfully:")
         print(json.dumps(agent_properties, indent=2))
         return agent_properties
 
@@ -125,7 +125,7 @@ class LlmEvaluator:
             transcript.append(f"{current_speaker}: {''.join(current_utterance)}")
 
         full_transcript = "\n".join(transcript)
-        print("✅ Transcription complete:")
+        print("Transcription complete:")
         print(full_transcript)
         return full_transcript
 
@@ -156,12 +156,12 @@ class LlmEvaluator:
             text_format=LlmEvaluationResult
         )
         
-        print("✅ OpenAI evaluation successful. Received structured output:")
+        print("OpenAI evaluation successful. Received structured output:")
         #print(response.model_dump_json(indent=2))
         
         # Extract the parsed result from the response
         parsed_result = response.output[0].content[0].parsed
-        print("✅ Extracted parsed result:")
+        print("Extracted parsed result:")
         print(f"personaAdherence: {parsed_result.personaAdherence}")
         print(f"languageSwitch: {parsed_result.languageSwitch}")
         print(f"sentiment: {parsed_result.sentiment}")
@@ -176,7 +176,7 @@ class LlmEvaluator:
         agent_properties = self.get_agent_properties(agent_id)
         transcript = self.transcribe_audio(file_path)
         if not transcript:
-            print("❌ Transcription failed or produced empty text. Skipping evaluation.")
+            print("Transcription failed or produced empty text. Skipping evaluation.")
             raise ValueError("Transcription failed or produced empty text.")
         evaluation = self.evaluate_transcript(transcript, agent_properties)
         print(f"===== LLM Evaluation for {os.path.basename(file_path)} Complete =====\n")

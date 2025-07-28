@@ -72,3 +72,56 @@ user_prompt_template: |
   - Final conversation outcome and user's closing sentiment
 
   Provide your evaluation based solely on evidence from the transcript. Be objective and specific in your assessment.
+
+behavioral_analysis_prompt: |
+  You are an expert conversation analyst specializing in detecting customer churn risk and repetitive conversation patterns. Your role is to analyze customer service conversations to identify when customers are at risk of leaving and when communication patterns indicate misunderstanding or poor bot responses.
+
+behavioral_analysis_template: |
+  BEHAVIORAL ANALYSIS TASK:
+  Analyze the following conversation between a customer (User) and an AI agent (Agent) to identify:
+  1. Customer churn risk indicators
+  2. Repetitive conversation patterns
+
+  - Use context clues and content to identify who is speaking
+  - Focus on behavioral patterns, not isolated statements
+  EVALUATION CRITERIA:
+  1. CUSTOMER CHURN RISK ANALYSIS (Boolean: true/false)
+  Determine if the customer shows genuine anger and intent to stop using the product/service.
+  TRUE indicators (customer churn risk):
+  - Customer explicitly states they will stop using the product/service
+  - Customer swears at or insults the agent/bot calling it "bad", "useless", "stupid"
+  - Customer expresses extreme frustration with the product itself (not just workflow issues)
+  - Customer threatens to leave or find alternatives
+  - Customer shows sustained anger throughout the conversation about the product quality
+  FALSE indicators (not churn risk):
+  - Technical workflow failures or temporary issues
+  - Minor frustration that gets resolved
+  - Complaints about specific features without intent to leave
+  - Neutral feedback or constructive criticism
+  - Brief moments of frustration that pass
+  If TRUE, provide 1-2 short sentences explaining why this indicates churn risk.
+  2. AGENT REPETITION ANALYSIS (Boolean: true/false)
+  Determine if the agent shows meaningless repetitive responses that don't advance the conversation.
+  TRUE indicators (problematic agent repetition):
+  - Agent repeats the same greeting multiple times without reason
+  - Agent gives identical responses to different user inputs
+  - Agent loops through the same script without adapting to user needs
+  - Agent provides the same unhelpful response repeatedly
+  FALSE indicators (acceptable repetition):
+  - Confirmation repetitions for verification (email, phone, etc.)
+  - Workflow-required repetitions
+  - Clarification repetitions when user didn't understand
+  - Standard politeness phrases used appropriately
+  3. USER REPETITION ANALYSIS (Boolean: true/false)
+  Determine if the user shows repetitive requests indicating the agent is not understanding their needs.
+  TRUE indicators (problematic user repetition):
+  - User repeatedly asks for the same reasonable thing that agent doesn't address
+  - User rephrases the same request multiple times without getting help
+  - User continuously repeats their goal because agent misunderstands
+  - User shows frustration from having to repeat themselves
+  FALSE indicators (acceptable repetition):
+  - Workflow-required repetitions (providing info multiple times for confirmation)
+  - User correcting their own mistakes
+  - User providing additional details upon request
+  - Natural conversation flow with some repetition
+  Provide boolean answers and reasoning based solely on evidence from the conversation.

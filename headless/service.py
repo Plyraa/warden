@@ -8,7 +8,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 
-from schemas import AnalysisResult, AnalysisStatus
+from schemas import AudioFileList, MetricsResponse, BatchMetricsResponse
 from noise_detection import detect_noise
 from audio_processor import AudioProcessor
 from url_downloader import URLDownloader
@@ -27,11 +27,11 @@ class VoiceAgentEvaluatorService:
     @version 1.0
     """
 
-    def __init__(self) -> object:
+    def __init__(self, enable_behavioral_analysis: bool = False) -> object:
         # Use a stable directory under the project root so that manual cleanup can be performed
         self.audio_dir = Path("audio_downloads")
         self.audio_dir.mkdir(parents=True, exist_ok=True)
-        self.processor = AudioProcessor(audio_dir=self.audio_dir)
+        self.processor = AudioProcessor(audio_dir=self.audio_dir, enable_behavioral_analysis=enable_behavioral_analysis)
         self.downloader = URLDownloader(audio_dir=self.audio_dir)
         
         # Initialize LLM evaluator with error handling
@@ -136,32 +136,37 @@ class VoiceAgentEvaluatorService:
                     elif overlap.get("interrupter") == "user":
                         user_ai_overlap_count += 1
 
-                # Create successful response
-                result = MetricsResponse(
-                    file_path=path,
-                    filename=filename,
-                    status="success",
-                    latency_points=latency_points,
-                    average_latency=latency_metrics.get("avg_latency", 0) * 1000,
-                    p50_latency=latency_metrics.get("p50_latency", 0) * 1000,
-                    p90_latency=latency_metrics.get("p90_latency", 0) * 1000,
-                    min_latency=latency_metrics.get("min_latency", 0) * 1000,
-                    max_latency=latency_metrics.get("max_latency", 0) * 1000,
-                    ai_interrupting_user=metrics.get("ai_interrupting_user", False),
-                    user_interrupting_ai=metrics.get("user_interrupting_ai", False),
-                    ai_user_overlap_count=ai_user_overlap_count,
-                    user_ai_overlap_count=user_ai_overlap_count,
-                    talk_ratio=metrics.get("talk_ratio", 0),
-                    average_pitch=metrics.get("average_pitch", 0),
-                    words_per_minute=metrics.get("words_per_minute", 0),
-                    hasEcho=metrics.get("hasEcho", False),
-                    echoInterrupt=metrics.get("echoInterrupt", False),
-                    hasNoise=metrics.get("hasNoise", False),
-                    noiseInterrupt=metrics.get("noiseInterrupt", False),
-                    personaAdherence=llm_evaluation.personaAdherence if llm_evaluation else None,
-                    languageSwitch=llm_evaluation.languageSwitch if llm_evaluation else None,
-                    sentiment=llm_evaluation.sentiment if llm_evaluation else None,
-                )
+                    # Create successful response
+                    result = MetricsResponse(
+                        file_path=path,
+                        filename=filename,
+                        status="success",
+                        latency_points=latency_points,
+                        average_latency=latency_metrics.get("avg_latency", 0) * 1000,
+                        p50_latency=latency_metrics.get("p50_latency", 0) * 1000,
+                        p90_latency=latency_metrics.get("p90_latency", 0) * 1000,
+                        min_latency=latency_metrics.get("min_latency", 0) * 1000,
+                        max_latency=latency_metrics.get("max_latency", 0) * 1000,
+                        ai_interrupting_user=metrics.get("ai_interrupting_user", False),
+                        user_interrupting_ai=metrics.get("user_interrupting_ai", False),
+                        ai_user_overlap_count=ai_user_overlap_count,
+                        user_ai_overlap_count=user_ai_overlap_count,
+                        talk_ratio=metrics.get("talk_ratio", 0),
+                        average_pitch=metrics.get("average_pitch", 0),
+                        words_per_minute=metrics.get("words_per_minute", 0),
+                        hasEcho=metrics.get("hasEcho", False),
+                        echoInterrupt=metrics.get("echoInterrupt", False),
+                        hasNoise=metrics.get("hasNoise", False),
+                        noiseInterrupt=metrics.get("noiseInterrupt", False),
+                        personaAdherence=llm_evaluation.personaAdherence if llm_evaluation else None,
+                        languageSwitch=llm_evaluation.languageSwitch if llm_evaluation else None,
+                        sentiment=llm_evaluation.sentiment if llm_evaluation else None,
+                        # Add behavioral analysis results
+                        userChurnRisk=metrics.get("userChurnRisk"),
+                        userChurnReasoning=metrics.get("userChurnReasoning"),
+                        userRepetition=metrics.get("userRepetition"),
+                        agentRepetition=metrics.get("agentRepetition"),
+                    )
                 
                 logger.info(f"Successfully processed: {path}")
                 results.append(result)
@@ -269,6 +274,7 @@ class VoiceAgentEvaluatorService:
                     if self.llm_evaluator is not None:
                         try:
                             logger.info(f"Starting LLM evaluation for {filename} with agent_id {agent_id}")
+                            loop = asyncio.get_event_loop()
                             llm_evaluation = await loop.run_in_executor(None, self.llm_evaluator.run_evaluation, local_file_path, agent_id)
                             logger.info(f"LLM evaluation completed successfully for {filename}")
                         except Exception as e:

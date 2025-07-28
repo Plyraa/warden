@@ -30,6 +30,13 @@ class AudioFileList(BaseModel):
         }
 
 
+class BehavioralAnalysisResult(BaseModel):
+    """Model for behavioral analysis results from Gemini"""
+    userChurnRisk: bool = Field(..., description="Whether the customer shows genuine churn risk indicators")
+    userChurnReasoning: Optional[str] = Field(None, description="1-2 short sentences explaining the churn risk assessment")
+    userRepetition: bool = Field(..., description="Whether user shows problematic repetitive behavior")
+    agentRepetition: bool = Field(..., description="Whether agent shows problematic repetitive behavior")
+
 class MetricsResponse(BaseModel):
     """Model for the metrics response"""
     file_path: str
@@ -57,6 +64,11 @@ class MetricsResponse(BaseModel):
     personaAdherence: Optional[int] = Field(None, description="Adherence to the specified persona, from 1 to 5.", ge=1, le=5)
     languageSwitch: Optional[bool] = Field(None, description="Whether the agent switched languages.")
     sentiment: Optional[Literal["happy", "neutral", "angry", "disappointed"]] = Field(None, description="The user's sentiment.")
+    # Behavioral Analysis Metrics (Gemini-based)
+    userChurnRisk: Optional[bool] = Field(None, description="Whether the customer shows genuine churn risk indicators")
+    userChurnReasoning: Optional[str] = Field(None, description="1-2 short sentences explaining the churn risk assessment")
+    userRepetition: Optional[bool] = Field(None, description="Whether user shows problematic repetitive behavior")
+    agentRepetition: Optional[bool] = Field(None, description="Whether agent shows problematic repetitive behavior")
 
 class BatchMetricsResponse(BaseModel):
     """Model for the batch metrics response"""

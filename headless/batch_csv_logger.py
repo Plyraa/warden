@@ -48,7 +48,11 @@ CSV_HEADERS = [
     'noiseInterrupt',
     'personaAdherence',
     'languageSwitch',
-    'sentiment'
+    'sentiment',
+    'userChurnRisk',
+    'userChurnReasoning',
+    'userRepetition',
+    'agentRepetition'
 ]
 
 def ensure_output_directory():

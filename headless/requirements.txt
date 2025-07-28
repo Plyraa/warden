@@ -19,3 +19,5 @@ elevenlabs
 python-dotenv
 pyyaml
 denoiser
+httpx
+google-genai

@@ -17,7 +17,7 @@ from typing import List, Dict, Any
 # Configuration
 API_BASE = "http://localhost:8030"
 # TODO: Update this to your actual audio files directory
-AUDIO_FILES_DIR = r"C:\Users\Plyra\Downloads\high_lat"
+AUDIO_FILES_DIR = r"C:\Users\ArdAlp\Downloads\high_lat"
 # TODO: Update this to your actual input CSV file path
 INPUT_CSV = "test_input.csv"
 OUTPUT_DIR = "csv_outputs"
@@ -46,13 +46,14 @@ CSV_HEADERS = [
     'echoInterrupt',
     'hasNoise',
     'noiseInterrupt',
-    'personaAdherence',
     'languageSwitch',
     'sentiment',
     'userChurnRisk',
     'userChurnReasoning',
     'userRepetition',
-    'agentRepetition'
+    'agentRepetition',
+    'taskCompletion',
+    'taskCompletionReasoning'
 ]
 
 def ensure_output_directory():
@@ -60,7 +61,7 @@ def ensure_output_directory():
     Path(OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
 
 def get_audio_data_from_csv(csv_path: str, audio_dir: str) -> List[Dict[str, str]]:
-    """Get audio file paths and agent_ids from the specified CSV file"""
+    """Get audio file paths from the specified CSV file"""
     audio_data = []
     if not os.path.exists(csv_path):
         print(f"⚠️  CSV file not found: {csv_path}")
@@ -69,20 +70,19 @@ def get_audio_data_from_csv(csv_path: str, audio_dir: str) -> List[Dict[str, str
     with open(csv_path, 'r', newline='', encoding='utf-8') as csvfile:
         reader = csv.DictReader(csvfile)
         for row in reader:
-            agent_id = row.get('agent_id')
             filename = row.get('filename')
-            if agent_id and filename:
+            if filename:
                 file_path = os.path.join(audio_dir, filename)
                 if os.path.exists(file_path):
-                    audio_data.append({"path": file_path, "agent_id": agent_id})
+                    audio_data.append({"path": file_path})
                 else:
                     print(f"⚠️  Audio file not found: {file_path}")
             else:
                 print(f"⚠️  Skipping invalid row in CSV: {row}")
 
-    print(f"Found {len(audio_data)} audio files with agent IDs from {csv_path}")
+    print(f"Found {len(audio_data)} audio files from {csv_path}")
     for data in audio_data[:5]:
-        print(f"  - {os.path.basename(data['path'])} (Agent: {data['agent_id']})")
+        print(f"  - {os.path.basename(data['path'])}")
     if len(audio_data) > 5:
         print(f"  ... and {len(audio_data) - 5} more files")
         
@@ -170,6 +170,113 @@ def print_summary(results: List[Dict[str, Any]]):
         if len(failed) > 3:
             print(f"  ... and {len(failed) - 3} more failures")
 
+def print_results_table(results: List[Dict[str, Any]]):
+    """Print results in a pretty table format using only built-in Python"""
+    if not results:
+        print("📊 No results to display")
+        return
+    
+    print(f"\n📊 DETAILED RESULTS TABLE")
+    print("=" * 140)
+    
+    # Define column headers and widths
+    headers = ["Filename", "Status", "Latency", "Ratio", "Echo", "Noise", "Sentiment", "Churn", "AgentRep", "UserRep", "TaskComp"]
+    widths = [22, 8, 10, 8, 6, 6, 10, 8, 9, 8, 12]
+    
+    # Print header
+    header_line = "│"
+    for i, (header, width) in enumerate(zip(headers, widths)):
+        header_line += f" {header:^{width}} │"
+    print(header_line)
+    
+    # Print separator line
+    separator = "├"
+    for width in widths:
+        separator += "─" * (width + 2) + "┼"
+    separator = separator[:-1] + "┤"
+    print(separator)
+    
+    # Print data rows
+    for result in results:
+        # Prepare data
+        filename = result.get('filename', 'Unknown')[:23] + ".." if len(result.get('filename', '')) > 25 else result.get('filename', 'Unknown')
+        status = "✅ OK" if result.get('status') == 'success' else "❌ ERR"
+        
+        if result.get('status') == 'success':
+            latency = f"{result.get('average_latency', 0):.1f}ms"
+            ratio = f"{result.get('talk_ratio', 0):.2f}"
+        else:
+            latency = "N/A"
+            ratio = "N/A"
+        
+        # Handle boolean values with emojis
+        echo = "🔊" if result.get('hasEcho') else "🔇"
+        noise = "📢" if result.get('hasNoise') else "🔕"
+        
+        # Handle optional fields
+        sentiment = result.get('sentiment', 'N/A')[:10] if result.get('sentiment') else 'N/A'
+        
+        churn_risk = result.get('userChurnRisk')
+        if churn_risk is True:
+            churn = "⚠️ YES"
+        elif churn_risk is False:
+            churn = "✅ NO"
+        else:
+            churn = "N/A"
+        
+        agent_rep = result.get('agentRepetition')
+        if agent_rep is True:
+            agent_rep_str = "🔄 YES"
+        elif agent_rep is False:
+            agent_rep_str = "✅ NO"
+        else:
+            agent_rep_str = "N/A"
+        
+        user_rep = result.get('userRepetition')
+        if user_rep is True:
+            user_rep_str = "🔄 YES"
+        elif user_rep is False:
+            user_rep_str = "✅ NO"
+        else:
+            user_rep_str = "N/A"
+        
+        # Handle task completion
+        task_comp = result.get('taskCompletion')
+        if task_comp == "Fully Completed":
+            task_comp_str = "✅ FULL"
+        elif task_comp == "Partially Completed":
+            task_comp_str = "⚠️ PART"
+        elif task_comp == "Not Completed":
+            task_comp_str = "❌ NONE"
+        else:
+            task_comp_str = "N/A"
+        
+        # Prepare row data
+        row_data = [filename, status, latency, ratio, echo, noise, sentiment, churn, agent_rep_str, user_rep_str, task_comp_str]
+        
+        # Print row
+        row_line = "│"
+        for i, (data, width) in enumerate(zip(row_data, widths)):
+            if i == 0:  # Left align filename
+                row_line += f" {data:<{width}} │"
+            else:  # Center align others
+                row_line += f" {data:^{width}} │"
+        print(row_line)
+    
+    # Print bottom border
+    bottom = "└"
+    for width in widths:
+        bottom += "─" * (width + 2) + "┴"
+    bottom = bottom[:-1] + "┘"
+    print(bottom)
+    
+    # Add legend
+    print(f"\n📖 LEGEND:")
+    print(f"Status: ✅ Success, ❌ Error")
+    print(f"Audio: 🔊 Echo, 🔇 No Echo, 📢 Noise, 🔕 No Noise")
+    print(f"Risk: ⚠️ Risk Detected, ✅ No Risk, 🔄 Repetition")
+    print(f"Task: ✅ FULL = Fully Completed, ⚠️ PART = Partially Completed, ❌ NONE = Not Completed, N/A = Not Analyzed")
+
 def main():
     """Main processing function"""
     print("🚀 Batch Audio Processing CSV Logger")
@@ -197,6 +304,9 @@ def main():
         
         # Print summary
         print_summary(results)
+        
+        # Print detailed results table
+        print_results_table(results)
         
         print(f"\n✅ Processing complete!")
         print(f"📄 CSV file: {os.path.abspath(csv_output_path)}")

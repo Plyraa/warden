@@ -1,36 +1,49 @@
 import os
 import requests
 import yaml
-from openai import OpenAI
-from elevenlabs.client import ElevenLabs
-from pydantic import BaseModel, Field
-from typing import List, Literal, Dict, Any
-from dotenv import load_dotenv
+import time
+import traceback
 import json
+import re
+import base64
+import mimetypes
+import httpx
+from pydantic import BaseModel, Field
+from typing import List, Literal, Dict, Any, Optional
+from dotenv import load_dotenv
+from schemas import BehavioralAnalysisResult
 
 load_dotenv()
 
 class LlmEvaluationResult(BaseModel):
-    personaAdherence: int = Field(..., description="Adherence to the specified persona, from 1 to 5.", ge=1, le=5)
     languageSwitch: bool = Field(..., description="Whether the agent switched languages.")
     sentiment: Literal["happy", "neutral", "angry", "disappointed"] = Field(..., description="The user's sentiment.")
 
+class CombinedEvaluationResult(BaseModel):
+    """Combined result containing both LLM evaluation and behavioral analysis"""
+    # LLM Evaluation results
+    languageSwitch: bool = Field(..., description="Whether the agent switched languages.")
+    sentiment: Literal["happy", "neutral", "angry", "disappointed"] = Field(..., description="The user's sentiment.")
+    # Behavioral Analysis results
+    userChurnRisk: bool = Field(..., description="Whether the customer shows genuine churn risk indicators")
+    userChurnReasoning: Optional[str] = Field(None, description="1-2 short sentences explaining the churn risk assessment")
+    userRepetition: bool = Field(..., description="Whether user shows problematic repetitive behavior")
+    agentRepetition: bool = Field(..., description="Whether agent shows problematic repetitive behavior")
+    taskCompletion: Literal["Fully Completed", "Partially Completed", "Not Completed"] = Field(..., description="Whether the user achieved their primary goal by the end of the call")
+    taskCompletionReasoning: str = Field(..., description="One-sentence justification for the task completion assessment")
+
 class LlmEvaluator:
     def __init__(self):
-        # Check for required API keys
-        openai_key = os.getenv("OPENAI_API_KEY")
-        elevenlabs_key = os.getenv("ELEVENLABS_API_KEY")
+        # Check for required API keys (only Gemini proxy now)
+        self.gemini_api_key = os.getenv("PROXY_API_KEY")
+        self.gemini_proxy_base_url = os.getenv("GEMINI_PROXY_BASE_URL")
         
-        if not openai_key:
-            raise ValueError("OPENAI_API_KEY not found in environment variables")
-        if not elevenlabs_key:
-            raise ValueError("ELEVENLABS_API_KEY not found in environment variables")
+        if not self.gemini_api_key:
+            raise ValueError("PROXY_API_KEY not found in environment variables")
+        if not self.gemini_proxy_base_url:
+            raise ValueError("GEMINI_PROXY_BASE_URL not found in environment variables")
             
-        print(f"✅ Initializing LLM Evaluator with API keys present")
-        
-        self.openai_client = OpenAI(base_url="https://dev.jotform.ai/openai/v1", api_key=openai_key)
-        self.elevenlabs_client = ElevenLabs(api_key=elevenlabs_key)
-        self.jotform_agent_api_url = "https://www.jotform.com/API/ai-agent-builder/agents/{agent_id}/properties"
+        print(f"✅ Initializing LLM Evaluator with Gemini proxy configuration")
         
         # Load prompts from YAML file
         self.prompts = self._load_prompts()
@@ -43,142 +56,403 @@ class LlmEvaluator:
             print("✅ Evaluation prompts loaded from YAML file")
             return prompts
 
-    def get_agent_properties(self, agent_id: str) -> Dict[str, Any]:
-        """
-        Fetches agent properties from the Jotform API.
-        """
-        print(f"\n--- Step 1: Fetching Agent Properties for agent_id: {agent_id} ---")
-        headers = {
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Connection": "keep-alive",
-            "Content-Type": "application/json",
-            "DNT": "1",
-            "Origin": "https://www.jotform.com",
-            "Referer": f"https://www.jotform.com/agent/{agent_id}/phone",
-            "Sec-Fetch-Dest": "empty",
-            "Sec-Fetch-Mode": "cors",
-            "Sec-Fetch-Site": "same-origin",
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
-            "sec-ch-ua": '"Not;A=Brand";v="24", "Chromium";v="128"',
-            "sec-ch-ua-mobile": "?0",
-            "sec-ch-ua-platform": '"macOS"',
+    def _get_mime_type(self, file_path: str) -> str:
+        """Get the MIME type for an audio file."""
+        mime_type, _ = mimetypes.guess_type(file_path)
+        
+        # Common audio MIME types
+        audio_mime_types = {
+            '.mp3': 'audio/mp3',
+            '.wav': 'audio/wav',
+            '.m4a': 'audio/mp4',
+            '.aac': 'audio/aac',
+            '.ogg': 'audio/ogg',
+            '.flac': 'audio/flac'
         }
-        url = self.jotform_agent_api_url.format(agent_id=agent_id)
-        response = requests.get(url, headers=headers, timeout=15)
-        response.raise_for_status()
         
-        properties_list = response.json().get("content", [])
-        agent_properties = {}
-        for prop in properties_list:
-            agent_properties[prop['prop']] = prop['value']
+        if mime_type and mime_type.startswith('audio/'):
+            return mime_type
         
-        print("✅ Agent properties fetched successfully:")
-        print(json.dumps(agent_properties, indent=2))
-        return agent_properties
+        # Fallback to extension-based detection
+        ext = os.path.splitext(file_path)[1].lower()
+        return audio_mime_types.get(ext, 'audio/mp3')  # Default to mp3
 
-    def transcribe_audio(self, file_path: str) -> str:
-        """
-        Transcribes audio using ElevenLabs and returns a formatted transcript.
-        """
-        print(f"\n--- Step 2: Transcribing Audio File: {os.path.basename(file_path)} ---")
-        with open(file_path, "rb") as f:
-            response = self.elevenlabs_client.speech_to_text.convert(
-                file=f,
-                model_id="scribe_v1_experimental",
-                diarize=True,
-                num_speakers=2,
-                timestamps_granularity="word",
-                tag_audio_events=False,
-            )
-
-        if not response.words:
-            return ""
-            
-        speaker_ids = sorted(list(set(word.speaker_id for word in response.words if word.speaker_id is not None)))
-        if not speaker_ids:
-            # If no speaker IDs, just concatenate text.
-            return response.text
-
-        # Simple assumption: first speaker is agent. This might need refinement.
-        agent_speaker_id = speaker_ids[0]
-        user_speaker_id = speaker_ids[1] if len(speaker_ids) > 1 else speaker_ids[0]
-
-
-        transcript = []
-        current_speaker = None
-        current_utterance = []
-
-        for word in response.words:
-            speaker = "Agent" if word.speaker_id == agent_speaker_id else "User"
-            if current_speaker is None:
-                current_speaker = speaker
-
-            if speaker != current_speaker:
-                transcript.append(f"{current_speaker}: {''.join(current_utterance)}")
-                current_utterance = []
-                current_speaker = speaker
-            
-            current_utterance.append(word.text)
-
-        if current_utterance:
-            transcript.append(f"{current_speaker}: {''.join(current_utterance)}")
-
-        full_transcript = "\n".join(transcript)
-        print("✅ Transcription complete:")
-        print(full_transcript)
-        return full_transcript
-
-    def evaluate_transcript(self, transcript: str, agent_properties: Dict[str, Any]) -> LlmEvaluationResult:
-        """
-        Evaluates the transcript using OpenAI's gpt-4.1-mini model with structured output.
-        """
-        print("\n--- Step 3: Evaluating Transcript with OpenAI ---")
+    def _encode_audio_file(self, file_path: str) -> tuple[str, str]:
+        """Read and base64 encode an audio file. Returns (base64_data, mime_type)"""
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"Audio file not found: {file_path}")
         
-        # Use prompts from YAML file
-        system_prompt = self.prompts["system_prompt"]
+        with open(file_path, 'rb') as f:
+            audio_bytes = f.read()
         
-        user_prompt = self.prompts["user_prompt_template"].format(
-            persona=agent_properties.get('optimizedPersona', 'Not specified'),
-            language=agent_properties.get('language', 'Not specified'),
-            role=agent_properties.get('role', 'Not specified'),
-            transcript=transcript
-        )
+        base64_data = base64.b64encode(audio_bytes).decode('utf-8')
+        mime_type = self._get_mime_type(file_path)
+        
+        return base64_data, mime_type
 
-        print("... Sending evaluation request to OpenAI ...")
+    def _get_combined_response_schema(self) -> dict:
+        """Get the response schema for complete semantic analysis (LLM + behavioral) structured output."""
+        return {
+            "type": "OBJECT",
+            "properties": {
+                # LLM Evaluation fields
+                "languageSwitch": {
+                    "type": "BOOLEAN",
+                    "description": "Whether the agent switched languages during the conversation"
+                },
+                "sentiment": {
+                    "type": "STRING",
+                    "enum": ["happy", "neutral", "angry", "disappointed"],
+                    "description": "The user's overall sentiment during the conversation"
+                },
+                # Behavioral Analysis fields
+                "userChurnRisk": {
+                    "type": "BOOLEAN",
+                    "description": "Whether the customer shows EXPLICIT dissatisfaction with service AND clear intent to stop using it (requires both harsh criticism AND intent to leave)"
+                },
+                "userChurnReasoning": {
+                    "type": "STRING",
+                    "description": "1-2 short sentences explaining the specific churn indicators (null if no churn risk)"
+                },
+                "userRepetition": {
+                    "type": "BOOLEAN",
+                    "description": "Whether user repeats reasonable requests 3+ times because agent fails to address them appropriately"
+                },
+                "agentRepetition": {
+                    "type": "BOOLEAN", 
+                    "description": "Whether agent shows 3+ instances of identical responses that fail to advance conversation meaningfully"
+                },
+                "taskCompletion": {
+                    "type": "STRING",
+                    "enum": ["Fully Completed", "Partially Completed", "Not Completed"],
+                    "description": "Whether the user achieved their primary goal by the end of the call"
+                },
+                "taskCompletionReasoning": {
+                    "type": "STRING",
+                    "description": "One-sentence justification for the task completion assessment"
+                }
+            },
+            "required": ["languageSwitch", "sentiment", "userChurnRisk", "userRepetition", "agentRepetition", "taskCompletion", "taskCompletionReasoning"],
+            "propertyOrdering": ["languageSwitch", "sentiment", "userChurnRisk", "userChurnReasoning", "userRepetition", "agentRepetition", "taskCompletion", "taskCompletionReasoning"]
+        }
 
-        response = self.openai_client.responses.parse(
-            model="gpt-4.1-mini",
-            input=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
+    def _call_gemini_via_proxy(self, prompt: str, audio_file_path: str = None, response_schema: dict = None) -> str:
+        """Call Gemini API through proxy server with audio support and optional structured output."""
+        if not self.gemini_proxy_base_url or not self.gemini_api_key:
+            raise ValueError("Gemini proxy configuration not available")
+
+        # The full URL to the proxy's generation endpoint
+        model_name = "gemini-2.5-flash"  # or "gemini-2.0-pro"
+        url = f"{self.gemini_proxy_base_url}/{model_name}:generateContent"
+
+        # Headers required by the proxy
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.gemini_api_key}",
+        }
+
+        # Get system instruction from prompts.yml
+        system_instruction = self.prompts.get("system_prompt", "")
+
+        # Build the parts list for the user message
+        parts = []
+        
+        # Add user prompt text
+        if prompt:
+            parts.append({"text": prompt})
+        
+        # Add audio file if provided
+        if audio_file_path and os.path.exists(audio_file_path):
+            try:
+                base64_data, mime_type = self._encode_audio_file(audio_file_path)
+                parts.append({
+                    "inline_data": {
+                        "mime_type": mime_type,
+                        "data": base64_data
+                    }
+                })
+                print(f"Added audio file: {audio_file_path} ({mime_type})")
+            except Exception as e:
+                print(f"Error processing audio file: {e}")
+                raise
+
+        if not parts:
+            raise ValueError("No content to send (no prompt or valid audio file)")
+
+        # Build generation config
+        generation_config = {
+            "temperature": 0.7
+        }
+        
+        # Add structured output configuration if schema provided
+        if response_schema:
+            generation_config["responseMimeType"] = "application/json"
+            generation_config["responseSchema"] = response_schema
+
+        # Payload structured for the Gemini API
+        payload = {
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": parts
+                }
             ],
-            text_format=LlmEvaluationResult
+            "generationConfig": generation_config,
+        }
+        
+        # Add system instruction from prompts.yml
+        if system_instruction:
+            payload["system_instruction"] = {
+                "parts": [
+                    {
+                        "text": system_instruction
+                    }
+                ]
+            }
+
+        print(f"Sending request to: {url}")
+        if audio_file_path:
+            print(f"Including audio file: {audio_file_path}")
+        if response_schema:
+            print("Using structured output with responseSchema")
+        if system_instruction:
+            print("Using system instruction from prompts.yml")
+
+        try:
+            # Using a timeout for audio processing
+            with httpx.Client(timeout=120.0) as client:  # Increased timeout for audio processing
+                response = client.post(url, headers=headers, json=payload)
+                response.raise_for_status()
+
+                # Parse the JSON response from the API
+                response_data = response.json()
+                
+                # Extract the text from the response
+                text_content = response_data['candidates'][0]['content']['parts'][0]['text']
+                
+                return text_content
+
+        except httpx.HTTPStatusError as e:
+            print(f"HTTP Error occurred: {e.response.status_code} - {e.response.reason_phrase}")
+            print("Response body:", e.response.text)
+            raise
+        except (KeyError, IndexError) as e:
+            print("Error: Could not parse the response from the API.")
+            print("Full response received:", response.text if 'response' in locals() else "No response received")
+            print(f"Parse error: {e}")
+            raise
+        except httpx.RequestError as e:
+            print(f"An error occurred while requesting {e.request.url!r}.")
+            print(f"Error details: {e}")
+            raise
+        except Exception as e:
+            print(f"An unexpected error occurred: {e}")
+            raise
+
+    def gemini_semantic_analysis(self, audio_file_path: str, language: str = "English", role: str = "Assistant") -> Optional[CombinedEvaluationResult]:
+        """
+        Perform complete semantic analysis using Gemini multimodal (LLM + behavioral analysis in one call)
+        
+        Args:
+            audio_file_path: Path to the audio file to analyze
+            language: Expected language for the conversation
+            role: Agent's role description
+            
+        Returns:
+            CombinedEvaluationResult or None if analysis fails
+        """
+        try:
+            print(f"\n--- Starting Gemini Semantic Analysis for {os.path.basename(audio_file_path)} ---")
+            
+            if not os.path.exists(audio_file_path):
+                raise FileNotFoundError(f"Audio file not found: {audio_file_path}")
+            
+            # Create the combined prompt for complete analysis
+            combined_prompt = self._create_combined_prompt(language, role)
+            
+            # Get the response schema for structured output
+            response_schema = self._get_combined_response_schema()
+            
+            # Generate analysis using proxy-based Gemini with structured output
+            print("🧠 Generating complete semantic analysis with structured output...")
+            response_text = self._call_gemini_via_proxy(combined_prompt, audio_file_path, response_schema)
+            
+            print(f"📄 Raw response: {response_text}")
+            
+            # Parse the JSON response (guaranteed to be valid JSON due to responseSchema)
+            try:
+                response_json = json.loads(response_text)
+                
+                # Create result object directly from the structured response
+                result = CombinedEvaluationResult(
+                    languageSwitch=response_json.get('languageSwitch', False),
+                    sentiment=response_json.get('sentiment', 'neutral'),
+                    userChurnRisk=response_json.get('userChurnRisk', False),
+                    userChurnReasoning=response_json.get('userChurnReasoning'),
+                    userRepetition=response_json.get('userRepetition', False),
+                    agentRepetition=response_json.get('agentRepetition', False),
+                    taskCompletion=response_json.get('taskCompletion', 'Not Completed'),
+                    taskCompletionReasoning=response_json.get('taskCompletionReasoning', 'No reasoning provided')
+                )
+                
+                print("✅ Gemini semantic analysis completed successfully:")
+                print(f"  - Language Switch: {result.languageSwitch}")
+                print(f"  - Sentiment: {result.sentiment}")
+                print(f"  - User Churn Risk: {result.userChurnRisk}")
+                if result.userChurnReasoning:
+                    print(f"  - Churn Reasoning: {result.userChurnReasoning}")
+                print(f"  - User Repetition: {result.userRepetition}")
+                print(f"  - Agent Repetition: {result.agentRepetition}")
+                print(f"  - Task Completion: {result.taskCompletion}")
+                print(f"  - Task Completion Reasoning: {result.taskCompletionReasoning}")
+                
+                return result
+                
+            except (json.JSONDecodeError, KeyError, ValueError) as e:
+                print(f"❌ Failed to parse semantic analysis response: {e}")
+                print(f"Raw response: {response_text}")
+                return None
+                
+        except Exception as e:
+            print(f"❌ Error in Gemini semantic analysis: {str(e)}")
+            print(f"Stack trace: {traceback.format_exc()}")
+            return None
+
+    def _create_combined_prompt(self, language: str = "English", role: str = "Assistant") -> str:
+        """Create the combined prompt for complete semantic analysis from YAML templates"""
+        # Use the unified system prompt and both evaluation templates
+        system_prompt = self.prompts.get("system_prompt", "")
+        user_prompt_template = self.prompts.get("user_prompt_template", "")
+        behavioral_template = self.prompts.get("behavioral_analysis_template", "")
+        
+        # Create combined prompt that includes both LLM and behavioral analysis
+        combined_prompt = f"""
+{system_prompt}
+
+EVALUATION TASK:
+Analyze the provided audio conversation for complete semantic analysis including language patterns, sentiment, and behavioral indicators.
+
+AGENT SPECIFICATIONS:
+- Required Language: {language}
+- Agent Role: {role}
+
+{user_prompt_template}
+
+{behavioral_template}
+
+IMPORTANT NOTES:
+- Analyze the actual audio conversation directly
+- Use audio context and conversation flow to identify who is speaking
+- Consider the entire conversation flow, not isolated statements
+- Focus on both agent performance and user experience
+- Listen for vocal tone, sentiment, and communication effectiveness
+"""
+        
+        # Format the template with provided values
+        formatted_prompt = combined_prompt.format(
+            language=language,
+            role=role
         )
         
-        print("✅ OpenAI evaluation successful. Received structured output:")
-        #print(response.model_dump_json(indent=2))
+        # Note: No need to add JSON schema instructions since we're using responseSchema
+        # for structured output which guarantees valid JSON responses
         
-        # Extract the parsed result from the response
-        parsed_result = response.output[0].content[0].parsed
-        print("✅ Extracted parsed result:")
-        print(f"personaAdherence: {parsed_result.personaAdherence}")
-        print(f"languageSwitch: {parsed_result.languageSwitch}")
-        print(f"sentiment: {parsed_result.sentiment}")
-        
-        return parsed_result
+        return formatted_prompt
 
-    def run_evaluation(self, file_path: str, agent_id: str):
+    def run_combined_evaluation(self, file_path: str, language: str = "English", role: str = "Assistant") -> CombinedEvaluationResult:
         """
-        Runs the full evaluation pipeline for a given audio file and agent ID.
+        Runs complete semantic analysis using Gemini for a given audio file.
         """
-        print(f"\n===== Starting LLM Evaluation for {os.path.basename(file_path)} =====")
-        agent_properties = self.get_agent_properties(agent_id)
-        transcript = self.transcribe_audio(file_path)
-        if not transcript:
-            print("❌ Transcription failed or produced empty text. Skipping evaluation.")
-            raise ValueError("Transcription failed or produced empty text.")
-        evaluation = self.evaluate_transcript(transcript, agent_properties)
-        print(f"===== LLM Evaluation for {os.path.basename(file_path)} Complete =====\n")
-        return evaluation
+        print(f"\n===== Starting Combined Semantic Evaluation for {os.path.basename(file_path)} =====")
+        
+        # Run complete semantic analysis using Gemini
+        result = self.gemini_semantic_analysis(file_path, language, role)
+        
+        if not result:
+            print("❌ Semantic analysis failed. Using default values.")
+            # Return default values if analysis fails
+            result = CombinedEvaluationResult(
+                languageSwitch=False,
+                sentiment="neutral",
+                userChurnRisk=False,
+                userChurnReasoning=None,
+                userRepetition=False,
+                agentRepetition=False,
+                taskCompletion="Not Completed",
+                taskCompletionReasoning="Analysis failed or was unavailable"
+            )
+        
+        print(f"===== Combined Semantic Evaluation for {os.path.basename(file_path)} Complete =====\n")
+        return result
+
+    def run_evaluation(self, file_path: str, language: str = "English", role: str = "Assistant") -> LlmEvaluationResult:
+        """
+        Runs basic LLM evaluation using Gemini for a given audio file.
+        
+        Note: This method extracts only LLM evaluation fields from the complete analysis.
+        For full analysis, use run_combined_evaluation() instead.
+        """
+        print(f"\n===== Starting Basic LLM Evaluation for {os.path.basename(file_path)} =====")
+        
+        # Run complete semantic analysis and extract LLM parts
+        combined_result = self.gemini_semantic_analysis(file_path, language, role)
+        
+        if not combined_result:
+            print("❌ Semantic analysis failed. Using default values.")
+            # Return default values if analysis fails
+            basic_result = LlmEvaluationResult(
+                languageSwitch=False,
+                sentiment="neutral"
+            )
+        else:
+            # Extract only LLM evaluation fields
+            basic_result = LlmEvaluationResult(
+                languageSwitch=combined_result.languageSwitch,
+                sentiment=combined_result.sentiment
+            )
+        
+        print(f"===== Basic LLM Evaluation for {os.path.basename(file_path)} Complete =====\n")
+        return basic_result
+
+    def analyze_batch_semantic(self, audio_files: list[str], language: str = "English", role: str = "Assistant") -> Dict[str, Optional[CombinedEvaluationResult]]:
+        """
+        Analyze multiple audio files for complete semantic analysis using Gemini
+        
+        Args:
+            audio_files: List of audio file paths
+            language: Expected language for the conversation
+            role: Agent's role description
+            
+        Returns:
+            Dictionary mapping file paths to analysis results
+        """
+        results = {}
+        total_files = len(audio_files)
+        
+        print(f"\n🚀 Starting batch semantic analysis for {total_files} files")
+        
+        for i, file_path in enumerate(audio_files, 1):
+            print(f"\n📊 Processing file {i}/{total_files}: {os.path.basename(file_path)}")
+            
+            try:
+                result = self.gemini_semantic_analysis(file_path, language, role)
+                results[file_path] = result
+                
+                if result:
+                    print(f"✅ Analysis complete for {os.path.basename(file_path)}")
+                else:
+                    print(f"❌ Analysis failed for {os.path.basename(file_path)}")
+                    
+            except Exception as e:
+                print(f"❌ Error processing {file_path}: {str(e)}")
+                results[file_path] = None
+            
+            # Add a small delay between requests to be respectful to the API
+            if i < total_files:
+                time.sleep(2)
+        
+        successful = sum(1 for result in results.values() if result is not None)
+        print(f"\n📊 Batch analysis complete: {successful}/{total_files} successful")
+        
+        return results
 

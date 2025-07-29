@@ -15,9 +15,8 @@ sys.path.append(os.getcwd() + "/..")
 from data_utils.authenticator import requestAuthenticator
 from data_utils.logger import init_logging
 
-# Initialize services (both with and without behavioral analysis)
-service_standard: VoiceAgentEvaluatorService = VoiceAgentEvaluatorService(enable_behavioral_analysis=False)
-service_with_behavioral: VoiceAgentEvaluatorService = VoiceAgentEvaluatorService(enable_behavioral_analysis=True)
+# Initialize services (unified semantic analysis)
+service: VoiceAgentEvaluatorService = VoiceAgentEvaluatorService()
 
 # Initialize logger
 file_path = os.path.dirname(os.path.realpath(__file__))
@@ -46,7 +45,6 @@ async def is_alive():
 @app.post("/batch", response_model=BatchMetricsResponse)
 async def get_batch_metrics(
     audio_files: AudioFileList, 
-    behavioral_analysis: bool = Query(False, description="Enable Gemini-based behavioral analysis"),
     authenticated: bool = Depends(requestAuthenticator)
 ):
     """
@@ -55,16 +53,13 @@ async def get_batch_metrics(
     Takes a list of file paths or URLs and returns metrics for each file.
     Returns partial results even if some files fail.
     
-    Parameters:
-    - behavioral_analysis: If True, includes churn risk and repetition analysis using Gemini
+    All analysis now includes complete semantic evaluation (language, sentiment, behavioral analysis, task completion).
     """
-    service = service_with_behavioral if behavioral_analysis else service_standard
     return await service.analyze_batch(audio_files)
 
 @app.post("/batch-stream")
 async def get_batch_metrics_stream(
     audio_files: AudioFileList, 
-    behavioral_analysis: bool = Query(False, description="Enable Gemini-based behavioral analysis"),
     authenticated: bool = Depends(requestAuthenticator)
 ):
     """
@@ -74,10 +69,8 @@ async def get_batch_metrics_stream(
     for one processed file. Files are processed sequentially but results are
     streamed immediately as each file completes.
     
-    Parameters:
-    - behavioral_analysis: If True, includes churn risk and repetition analysis using Gemini
+    All analysis now includes complete semantic evaluation (language, sentiment, behavioral analysis, task completion).
     """
-    service = service_with_behavioral if behavioral_analysis else service_standard
     return await service.analyze_batch_strem(audio_files)
 
 if __name__ == "__main__":

@@ -1,53 +1,36 @@
 system_prompt: |
-  You are an expert conversation analyst specializing in evaluating AI agent performance against predefined standards. Your role is to assess how well an AI agent adheres to its specified characteristics during customer phone call.
+  You are an expert conversation analyst specializing in comprehensive AI agent performance evaluation. Your role is to assess communication patterns, user satisfaction, behavioral indicators, and task completion during customer phone calls.
 
   You have extensive experience in:
   - Analyzing conversational tone and communication style
-  - Evaluating persona consistency and role adherence
   - Detecting language switches and communication breakdowns
   - Assessing customer sentiment and satisfaction indicators
+  - Identifying customer churn risk patterns and intent to discontinue service
+  - Recognizing repetitive conversation patterns that indicate poor communication
+  - Evaluating task completion and goal achievement in customer interactions
 
-  Your evaluations are precise, objective, and based on concrete evidence from the conversation transcript.
+  Your evaluations are precise, objective, and based on concrete evidence from the audio conversation. You analyze both basic communication patterns (language consistency, sentiment) and advanced behavioral indicators (churn risk, repetition patterns, task resolution) in a single comprehensive assessment.
 
 user_prompt_template: |
   EVALUATION TASK:
-  Analyze the following conversation between a customer (User) and an AI agent (Agent) based on the agent's predefined characteristics in a structured format.
+  Analyze the provided audio conversation between a customer (User) and an AI agent (Agent) for communication patterns and user satisfaction.
 
   AGENT SPECIFICATIONS:
-  - Persona Guidelines: {persona}
   - Required Language: {language}
   - Agent Role: {role}
 
-  CONVERSATION TRANSCRIPT:
-  {transcript}
+  AUDIO CONVERSATION:
+  Analyze the provided audio file for communication patterns and user satisfaction.
 
   IMPORTANT NOTES:
-  - Speaker labels (User/Agent) may be incorrectly assigned due to automatic transcription
-  - Use context clues and content to identify who is speaking
-  - Focus on the agent's responses, not the user's messages
+  - Use audio context and conversation flow to identify who is speaking (customer vs agent)
+  - Focus on the agent's responses and communication quality
   - Consider the entire conversation flow, not isolated statements
+  - Listen for tone, sentiment, and communication effectiveness
 
   EVALUATION CRITERIA:
 
-  1. PERSONA ADHERENCE (Score: 1-5)
-  Assess how well the agent embodies its defined persona and role through language, wording, and communication style throughout the interaction.
-
-  Scoring Guidelines:
-  - 5 (Excellent): Agent's wording and communication style perfectly matches the defined persona. Language choices, phrasing, and tone consistently reflect the character, regardless of conversation outcome.
-  - 4 (Good): Agent's language and style strongly align with the persona with only minor deviations in wording or phrasing that don't compromise character consistency.
-  - 3 (Mid): Agent demonstrates basic persona understanding through language choices but with noticeable inconsistencies in wording or communication style.
-  - 2 (Poor): Agent's wording and communication style only occasionally reflect the defined persona, frequently using language that doesn't match the character.
-  - 1 (Failing): Agent's language and communication style show no alignment with the defined persona, completely missing the character's voice and manner of speaking.
-
-  Consider:
-  - Consistency of language choices and phrasing that match the persona
-  - Appropriate vocabulary and communication style for the defined character
-  - Maintaining persona voice even when unable to help or when repeating questions
-  - Character-appropriate responses regardless of conversation success or failure
-  
-  IMPORTANT: Do not penalize for failed problem resolution, repeated questions, or inability to understand user input. Focus solely on whether the agent's wording and communication style match the defined persona.
-
-  2. LANGUAGE CONSISTENCY (Boolean: true/false)
+  1. LANGUAGE CONSISTENCY (Boolean: true/false)
   Determine if the agent maintained communication in the specified language throughout the conversation.
   
   Evaluation:
@@ -56,7 +39,7 @@ user_prompt_template: |
   
   Note: Consider context - if user switches languages, brief clarification in user's language followed by return to specified language may not count as a switch.
 
-  3. USER SENTIMENT ANALYSIS (Select: happy, neutral, angry, disappointed)
+  2. USER SENTIMENT ANALYSIS (Select: happy, neutral, angry, disappointed)
   Analyze the user's overall emotional state and satisfaction level based on their responses throughout the conversation.
 
   Sentiment Indicators:
@@ -67,61 +50,109 @@ user_prompt_template: |
 
   Consider:
   - Overall conversation trajectory and resolution
-  - User's language patterns and word choices
-  - Frequency and intensity of emotional indicators
+  - User's vocal tone, speech patterns, and emotional expressions
+  - Frequency and intensity of emotional indicators in speech
   - Final conversation outcome and user's closing sentiment
 
-  Provide your evaluation based solely on evidence from the transcript. Be objective and specific in your assessment.
-
-behavioral_analysis_prompt: |
-  You are an expert conversation analyst specializing in detecting customer churn risk and repetitive conversation patterns. Your role is to analyze customer service conversations to identify when customers are at risk of leaving and when communication patterns indicate misunderstanding or poor bot responses.
+  Provide your evaluation based solely on evidence from the audio conversation. Be objective and specific in your assessment.
 
 behavioral_analysis_template: |
   BEHAVIORAL ANALYSIS TASK:
-  Analyze the following conversation between a customer (User) and an AI agent (Agent) to identify:
+  Analyze the provided audio conversation between a customer (User) and an AI agent (Agent) to identify:
   1. Customer churn risk indicators
   2. Repetitive conversation patterns
+  3. Task understanding and resolution
 
-  - Use context clues and content to identify who is speaking
+  - Use audio context and conversation flow to identify who is speaking
   - Focus on behavioral patterns, not isolated statements
+
   EVALUATION CRITERIA:
+
   1. CUSTOMER CHURN RISK ANALYSIS (Boolean: true/false)
-  Determine if the customer shows genuine anger and intent to stop using the product/service.
-  TRUE indicators (customer churn risk):
-  - Customer explicitly states they will stop using the product/service
-  - Customer swears at or insults the agent/bot calling it "bad", "useless", "stupid"
-  - Customer expresses extreme frustration with the product itself (not just workflow issues)
-  - Customer threatens to leave or find alternatives
-  - Customer shows sustained anger throughout the conversation about the product quality
+  Determine if the customer shows EXPLICIT expressions of dissatisfaction with the service/product AND clear intent to stop using it.
+  
+  TRUE indicators (customer churn risk) - any of these must be present:
+  - Customer explicitly states they will stop using the product/service OR switch to competitors
+  - Customer expresses strong negative emotions about the service/product quality (not just workflow issues)
+  - Customer uses harsh language: swears, calls service "terrible", "awful", "worst", "useless", "garbage"
+  - Customer shows sustained anger/frustration throughout most of the conversation
+  - Customer rejects agent's help or solutions with hostility
+  
   FALSE indicators (not churn risk):
-  - Technical workflow failures or temporary issues
-  - Minor frustration that gets resolved
-  - Complaints about specific features without intent to leave
-  - Neutral feedback or constructive criticism
-  - Brief moments of frustration that pass
-  If TRUE, provide 1-2 short sentences explaining why this indicates churn risk.
+  - Technical issues or temporary workflow problems without service criticism
+  - Minor frustration that gets resolved or customer calms down
+  - Complaints about specific features without expressing intent to leave
+  - Neutral feedback, constructive criticism, or professional complaints
+  - Brief moments of frustration followed by cooperation
+  - Customer continues working with agent toward resolution
+  - Customer asks questions about how to use the service better
+  
+  IMPORTANT: Churn risk requires BOTH severe dissatisfaction AND explicit intent to leave. Technical problems or workflow confusion alone do NOT indicate churn risk.
+  
+  If TRUE, provide 1-2 short sentences explaining the specific churn indicators.
+
   2. AGENT REPETITION ANALYSIS (Boolean: true/false)
-  Determine if the agent shows meaningless repetitive responses that don't advance the conversation.
-  TRUE indicators (problematic agent repetition):
-  - Agent repeats the same greeting multiple times without reason
-  - Agent gives identical responses to different user inputs
-  - Agent loops through the same script without adapting to user needs
-  - Agent provides the same unhelpful response repeatedly
+  Determine if the agent shows repetitive responses that fail to advance the conversation meaningfully.
+  
+  TRUE indicators (problematic agent repetition) - requires 3+ instances of:
+  - Agent gives identical word-for-word responses to different user inputs
+  - Agent repeats the same unhelpful suggestion without variation
+  - Agent loops through identical scripts without adapting to user feedback
+  - Agent provides the same non-solution repeatedly when user says it doesn't work
+  
   FALSE indicators (acceptable repetition):
-  - Confirmation repetitions for verification (email, phone, etc.)
-  - Workflow-required repetitions
+  - Confirmation repetitions for verification (repeating back email, phone, etc.)
+  - Workflow-required repetitions (policy statements, security questions)
   - Clarification repetitions when user didn't understand
-  - Standard politeness phrases used appropriately
+  - Standard politeness phrases ("thank you", "how can I help")
+  - Similar but contextually appropriate responses
+  - Repetition of successful solutions to similar problems
+
   3. USER REPETITION ANALYSIS (Boolean: true/false)
-  Determine if the user shows repetitive requests indicating the agent is not understanding their needs.
-  TRUE indicators (problematic user repetition):
-  - User repeatedly asks for the same reasonable thing that agent doesn't address
-  - User rephrases the same request multiple times without getting help
-  - User continuously repeats their goal because agent misunderstands
-  - User shows frustration from having to repeat themselves
+  Determine if the user repeats reasonable requests 3+ times because the agent fails to address them appropriately.
+  
+  TRUE indicators (problematic user repetition) - requires 3+ instances of:
+  - User repeats the exact same reasonable request because agent ignores it
+  - User rephrases the same goal multiple times without getting relevant help
+  - User shows increasing frustration from having to repeat themselves
+  - User explicitly says things like "I already told you", "as I said before", "I keep asking"
+  
   FALSE indicators (acceptable repetition):
-  - Workflow-required repetitions (providing info multiple times for confirmation)
-  - User correcting their own mistakes
-  - User providing additional details upon request
-  - Natural conversation flow with some repetition
-  Provide boolean answers and reasoning based solely on evidence from the conversation.
+  - Workflow-required repetitions (providing info for verification)
+  - User correcting their own previous statements
+  - User providing additional clarifying details when requested
+  - User repeating due to their own confusion (not agent failure)
+  - Natural conversation flow with minor repetition
+  - User restating after successful partial progress
+
+  4. TASK UNDERSTANDING & RESOLUTION ANALYSIS
+  First, identify the user's primary goal at the start of the conversation. Second, analyze the entire conversation. Consider agent's resolution trajectory and user's intent. Evaluate intent fulfillment and measure progress toward user goals. Finally, categorize the outcome as 'Fully Completed', 'Partially Completed', or 'Not Completed'. Provide a one-sentence justification for your choice.
+
+  EXAMPLES:
+  
+  Example 1 - Fully Completed:
+  User Goal: Get help with password reset
+  Audio Conversation: User explains they can't log in, agent guides through password reset process, user successfully resets password and confirms they can now access their account.
+  Assessment: "Fully Completed" - User successfully reset their password and regained account access with agent's guidance.
+
+  Example 2 - Partially Completed:
+  User Goal: Set up a new payment method and make a purchase
+  Audio Conversation: User wants to add a new card and buy a product, agent helps add the payment method successfully, but technical issues prevent the purchase from completing.
+  Assessment: "Partially Completed" - User successfully added payment method but couldn't complete the intended purchase due to technical issues.
+
+  Example 3 - Not Completed:
+  User Goal: Cancel their subscription
+  Audio Conversation: User repeatedly asks to cancel subscription, agent keeps redirecting to retention offers and troubleshooting, user hangs up frustrated without cancellation.
+  Assessment: "Not Completed" - User's primary goal of canceling subscription was not achieved despite multiple requests.
+
+  Example 4 - Fully Completed:
+  User Goal: Get information about pricing plans
+  Audio Conversation: User asks about different pricing tiers, agent explains all available plans with features and costs, user thanks agent and says they have all the information they need.
+  Assessment: "Fully Completed" - User received comprehensive information about all pricing plans as requested.
+
+  Example 5 - Fully Completed:
+  User Goal: Report a technical bug and get it fixed
+  Audio Conversation: User reports app crashing, agent acknowledges the issue and creates a support ticket, but cannot provide immediate fix or timeline.
+  Assessment: "Fully Completed" - Issue was documented and escalated, and that is the scope of agent for possible events. That counts as a full completion as agent fulfilled their role in the process.
+
+  Provide boolean answers and reasoning based solely on evidence from the audio conversation.

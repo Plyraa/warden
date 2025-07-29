@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Fast Behavioral Analysis CSV Logger
-Processes local audio files for churn risk and repetition analysis only
+Fast LLM Logger
+Processes local audio files for complete LLM evaluation including behavioral analysis
 """
 
 import os
@@ -12,24 +12,30 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any
-from gemini_behavioral_analyzer import GeminiBehavioralAnalyzer
+from llm_evaluator import LlmEvaluator
 
 # Configuration
-AUDIO_FILES_DIR = r"C:\Users\Plyra\Downloads\high_lat"  # TODO: Update this to your audio files directory
+AUDIO_FILES_DIR = r"C:\Users\ArdAlp\Downloads\high_lat"  # TODO: Update this to your audio files directory
 INPUT_CSV = "test_input.csv"  # TODO: Update this to your input CSV file path
 OUTPUT_DIR = "csv_outputs"
-CSV_FILENAME = f"behavioral_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+CSV_FILENAME = f"llm_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
 
-# CSV column headers for behavioral analysis only
+# CSV column headers for complete LLM evaluation
 CSV_HEADERS = [
     'filename',
     'file_path',
     'status',
     'error_message',
+    # LLM Evaluation metrics
+    'languageSwitch',
+    'sentiment',
+    # Behavioral Analysis metrics
     'userChurnRisk',
     'userChurnReasoning',
     'userRepetition',
     'agentRepetition',
+    'taskCompletion',
+    'taskCompletionReasoning',
     'processing_time_seconds'
 ]
 
@@ -69,29 +75,36 @@ def get_audio_files_from_csv(csv_path: str, audio_dir: str) -> List[str]:
         
     return audio_files
 
-def process_file_behavioral_analysis(analyzer: GeminiBehavioralAnalyzer, file_path: str) -> Dict[str, Any]:
-    """Process a single file for behavioral analysis"""
+def process_file_llm_evaluation(evaluator: LlmEvaluator, file_path: str) -> Dict[str, Any]:
+    """Process a single file for complete LLM evaluation"""
     start_time = time.time()
     filename = os.path.basename(file_path)
     
     try:
         print(f"🧠 Analyzing: {filename}")
         
-        # Run behavioral analysis
-        result = analyzer.analyze_audio_file(file_path)
+        # Run combined LLM evaluation (basic + behavioral)
+        result = evaluator.run_combined_evaluation(file_path)
         
         processing_time = time.time() - start_time
         
         if result:
+            # Extract results directly from CombinedEvaluationResult
             return {
                 'filename': filename,
                 'file_path': file_path,
                 'status': 'success',
                 'error_message': None,
+                # LLM Evaluation results
+                'languageSwitch': result.languageSwitch,
+                'sentiment': result.sentiment,
+                # Behavioral Analysis results
                 'userChurnRisk': result.userChurnRisk,
                 'userChurnReasoning': result.userChurnReasoning,
                 'userRepetition': result.userRepetition,
                 'agentRepetition': result.agentRepetition,
+                'taskCompletion': result.taskCompletion,
+                'taskCompletionReasoning': result.taskCompletionReasoning,
                 'processing_time_seconds': round(processing_time, 2)
             }
         else:
@@ -99,11 +112,15 @@ def process_file_behavioral_analysis(analyzer: GeminiBehavioralAnalyzer, file_pa
                 'filename': filename,
                 'file_path': file_path,
                 'status': 'error',
-                'error_message': 'Analysis returned no results',
+                'error_message': 'Evaluation returned no results',
+                'languageSwitch': None,
+                'sentiment': None,
                 'userChurnRisk': None,
                 'userChurnReasoning': None,
                 'userRepetition': None,
                 'agentRepetition': None,
+                'taskCompletion': None,
+                'taskCompletionReasoning': None,
                 'processing_time_seconds': round(processing_time, 2)
             }
             
@@ -117,37 +134,46 @@ def process_file_behavioral_analysis(analyzer: GeminiBehavioralAnalyzer, file_pa
             'file_path': file_path,
             'status': 'error',
             'error_message': error_msg,
+            'languageSwitch': None,
+            'sentiment': None,
             'userChurnRisk': None,
             'userChurnReasoning': None,
             'userRepetition': None,
             'agentRepetition': None,
+            'taskCompletion': None,
+            'taskCompletionReasoning': None,
             'processing_time_seconds': round(processing_time, 2)
         }
 
-def process_batch_behavioral_analysis(audio_files: List[str]) -> List[Dict[str, Any]]:
-    """Process multiple files for behavioral analysis"""
-    # Initialize the behavioral analyzer
+def process_batch_llm_evaluation(audio_files: List[str]) -> List[Dict[str, Any]]:
+    """Process multiple files for complete LLM evaluation"""
+    # Initialize the LLM evaluator
     try:
-        analyzer = GeminiBehavioralAnalyzer()
-        print("✅ Behavioral analyzer initialized")
+        evaluator = LlmEvaluator()
+        print("✅ LLM evaluator initialized with unified Gemini semantic analysis")
     except Exception as e:
-        print(f"❌ Failed to initialize behavioral analyzer: {e}")
+        print(f"❌ Failed to initialize LLM evaluator: {e}")
         return []
     
     results = []
     total_files = len(audio_files)
     
-    print(f"\n🚀 Starting behavioral analysis for {total_files} files")
+    print(f"\n🚀 Starting LLM evaluation for {total_files} files")
     start_time = time.time()
     
     for i, file_path in enumerate(audio_files, 1):
         print(f"\n📊 Processing file {i}/{total_files}")
         
-        result = process_file_behavioral_analysis(analyzer, file_path)
+        result = process_file_llm_evaluation(evaluator, file_path)
         results.append(result)
         
         if result['status'] == 'success':
-            print(f"✅ {result['filename']}: Churn={result['userChurnRisk']}, UserRep={result['userRepetition']}, AgentRep={result['agentRepetition']}")
+            # Show all results since we always do complete analysis
+            print(f"✅ {result['filename']}:")
+            print(f"   Language Switch: {result['languageSwitch']}")
+            print(f"   Sentiment: {result['sentiment']}")
+            print(f"   Churn Risk: {result['userChurnRisk']}")
+            print(f"   Task Completion: {result['taskCompletion']}")
         else:
             print(f"❌ {result['filename']}: {result['error_message']}")
         
@@ -162,7 +188,7 @@ def process_batch_behavioral_analysis(audio_files: List[str]) -> List[Dict[str, 
     return results
 
 def save_to_csv(results: List[Dict[str, Any]], csv_path: str):
-    """Save behavioral analysis results to CSV"""
+    """Save LLM evaluation results to CSV"""
     with open(csv_path, 'w', newline='', encoding='utf-8') as csvfile:
         writer = csv.DictWriter(csvfile, fieldnames=CSV_HEADERS)
         writer.writeheader()
@@ -173,7 +199,7 @@ def save_to_csv(results: List[Dict[str, Any]], csv_path: str):
     print(f"✅ Results saved to: {csv_path}")
 
 def print_summary(results: List[Dict[str, Any]]):
-    """Print behavioral analysis summary"""
+    """Print LLM evaluation summary"""
     if not results:
         print("📊 No results to summarize")
         return
@@ -181,22 +207,54 @@ def print_summary(results: List[Dict[str, Any]]):
     successful = [r for r in results if r['status'] == 'success']
     failed = [r for r in results if r['status'] == 'error']
     
-    print(f"\n📊 BEHAVIORAL ANALYSIS SUMMARY")
+    print(f"\n📊 LLM EVALUATION SUMMARY")
     print(f"=" * 50)
     print(f"Total Files: {len(results)}")
     print(f"✅ Successful: {len(successful)}")
     print(f"❌ Failed: {len(failed)}")
     
     if successful:
+        # LLM Evaluation metrics
+        language_switch_count = sum(1 for r in successful if r.get('languageSwitch'))
+        sentiment_counts = {}
+        for r in successful:
+            sentiment = r.get('sentiment')
+            if sentiment:
+                sentiment_counts[sentiment] = sentiment_counts.get(sentiment, 0) + 1
+        
+        # Behavioral Analysis metrics
         churn_risk_count = sum(1 for r in successful if r.get('userChurnRisk'))
         user_repetition_count = sum(1 for r in successful if r.get('userRepetition'))
         agent_repetition_count = sum(1 for r in successful if r.get('agentRepetition'))
+        
+        # Task Completion metrics
+        task_completion_counts = {}
+        for r in successful:
+            task_completion = r.get('taskCompletion')
+            if task_completion:
+                task_completion_counts[task_completion] = task_completion_counts.get(task_completion, 0) + 1
+        
         avg_processing_time = sum(r.get('processing_time_seconds', 0) for r in successful) / len(successful)
         
+        print(f"\n🗣️ LLM EVALUATION RESULTS:")
+        print(f"🌐 Language Switch: {language_switch_count}/{len(successful)} files ({language_switch_count/len(successful)*100:.1f}%)")
+        
+        print(f"😊 Sentiment Distribution:")
+        for sentiment, count in sentiment_counts.items():
+            percentage = count/len(successful)*100
+            print(f"   {sentiment}: {count} files ({percentage:.1f}%)")
+        
+        print(f"\n🧠 BEHAVIORAL ANALYSIS RESULTS:")
         print(f"🚨 Churn Risk Detected: {churn_risk_count}/{len(successful)} files ({churn_risk_count/len(successful)*100:.1f}%)")
         print(f"🔄 User Repetition: {user_repetition_count}/{len(successful)} files ({user_repetition_count/len(successful)*100:.1f}%)")
         print(f"🤖 Agent Repetition: {agent_repetition_count}/{len(successful)} files ({agent_repetition_count/len(successful)*100:.1f}%)")
-        print(f"⏱️  Average Processing Time: {avg_processing_time:.1f} seconds per file")
+        
+        print(f"\n✅ TASK COMPLETION RESULTS:")
+        for completion_status, count in task_completion_counts.items():
+            percentage = count/len(successful)*100
+            print(f"   {completion_status}: {count} files ({percentage:.1f}%)")
+        
+        print(f"\n⏱️  Average Processing Time: {avg_processing_time:.1f} seconds per file")
     
     if failed:
         print(f"\n❌ FAILED FILES:")
@@ -209,7 +267,7 @@ def print_summary(results: List[Dict[str, Any]]):
 
 def main():
     """Main processing function"""
-    print("🧠 Fast Behavioral Analysis CSV Logger")
+    print("🧠 Fast LLM Logger - Complete Audio Analysis")
     print("=" * 50)
     
     # Setup
@@ -224,8 +282,10 @@ def main():
         print("❌ No audio files found to process")
         return
     
-    # Process files for behavioral analysis only
-    results = process_batch_behavioral_analysis(audio_files)
+    print("✅ Complete LLM evaluation enabled (language, sentiment, behavioral analysis, task completion)")
+    
+    # Process files for complete LLM evaluation
+    results = process_batch_llm_evaluation(audio_files)
     
     if results:
         # Save to CSV
@@ -234,9 +294,9 @@ def main():
         # Print summary
         print_summary(results)
         
-        print(f"\n✅ Behavioral analysis complete!")
+        print(f"\n✅ LLM evaluation complete!")
         print(f"📄 CSV file: {os.path.abspath(csv_output_path)}")
-        print(f"💡 This analysis focuses only on churn risk and repetition patterns")
+        print(f"💡 Complete analysis: Language switch, sentiment, churn risk, repetition, and task completion")
     else:
         print("❌ No results to save")
 

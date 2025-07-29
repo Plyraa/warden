@@ -16,27 +16,16 @@ from scipy.signal import find_peaks
 from noise_reduction import apply_noise_reduction
 from echo_detection import detect_echo
 from noise_detection import detect_noise
-from gemini_behavioral_analyzer import GeminiBehavioralAnalyzer
+from schemas import BehavioralAnalysisResult
 
 class AudioProcessor:
-    def __init__(self, audio_dir: Path, enable_behavioral_analysis: bool = False):
+    def __init__(self, audio_dir: Path):
         self.sampling_rate = 16000
         self.vad_model = None
         self.get_speech_timestamps = None
         self.audio_dir = audio_dir
-        self.enable_behavioral_analysis = enable_behavioral_analysis
         
-        # Initialize behavioral analyzer if enabled
-        if self.enable_behavioral_analysis:
-            try:
-                self.behavioral_analyzer = GeminiBehavioralAnalyzer()
-                print("✅ Behavioral analyzer initialized")
-            except Exception as e:
-                print(f"⚠️ Warning: Could not initialize behavioral analyzer: {e}")
-                self.behavioral_analyzer = None
-                self.enable_behavioral_analysis = False
-        else:
-            self.behavioral_analyzer = None
+        # Note: Behavioral analysis is now always handled by the unified LLM evaluator
 
     def get_vad_model(self):
         """Get Silero VAD model and utility functions"""
@@ -47,7 +36,6 @@ class AudioProcessor:
                     repo_or_dir='snakers4/silero-vad',
                     model='silero_vad',
                     force_reload=False,
-                    onnx=False
                 )
                 self.vad_model = model
                 # Extract the get_speech_timestamps function from utils
@@ -707,19 +695,8 @@ class AudioProcessor:
                 raw_user_vad_segments, raw_agent_vad_segments
             )
 
-            # Run behavioral analysis if enabled
-            behavioral_result = None
-            if self.enable_behavioral_analysis and self.behavioral_analyzer:
-                print("Running Gemini behavioral analysis...")
-                try:
-                    behavioral_result = self.behavioral_analyzer.analyze_audio_file(filename)
-                    if behavioral_result:
-                        print("✅ Behavioral analysis completed")
-                    else:
-                        print("⚠️ Behavioral analysis returned no results")
-                except Exception as e:
-                    print(f"⚠️ Warning: Behavioral analysis failed: {e}")
-                    behavioral_result = None
+            # Note: Behavioral analysis is now handled by the LLM evaluator
+            # No behavioral analysis performed here anymore
 
             # Calculate all metrics
             metrics = {
@@ -743,22 +720,8 @@ class AudioProcessor:
                 "noiseInterrupt": noise_result.get("noiseInterrupt", False),
             }
             
-            # Add behavioral analysis results if available
-            if behavioral_result:
-                metrics.update({
-                    "userChurnRisk": behavioral_result.userChurnRisk,
-                    "userChurnReasoning": behavioral_result.userChurnReasoning,
-                    "userRepetition": behavioral_result.userRepetition,
-                    "agentRepetition": behavioral_result.agentRepetition,
-                })
-            else:
-                # Add None values if analysis wasn't performed or failed
-                metrics.update({
-                    "userChurnRisk": None,
-                    "userChurnReasoning": None,
-                    "userRepetition": None,
-                    "agentRepetition": None,
-                })
+            # Note: Behavioral analysis metrics are now handled by the LLM evaluator
+            # and will be added in the service layer
 
             print(f"Successfully processed: {filename}")
             return metrics

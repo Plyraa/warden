@@ -12,7 +12,7 @@ from schemas import AudioFileList, MetricsResponse, BatchMetricsResponse
 from noise_detection import detect_noise
 from audio_processor import AudioProcessor
 from url_downloader import URLDownloader
-from llm_evaluator import LlmEvaluator, LlmEvaluationResult
+from llm_evaluator import LlmEvaluator, LlmEvaluationResult, CombinedEvaluationResult
 
 sys.path.append(os.getcwd() + "/..")
 from data_utils.logger import init_logging
@@ -27,11 +27,11 @@ class VoiceAgentEvaluatorService:
     @version 1.0
     """
 
-    def __init__(self, enable_behavioral_analysis: bool = False) -> object:
+    def __init__(self) -> object:
         # Use a stable directory under the project root so that manual cleanup can be performed
         self.audio_dir = Path("audio_downloads")
         self.audio_dir.mkdir(parents=True, exist_ok=True)
-        self.processor = AudioProcessor(audio_dir=self.audio_dir, enable_behavioral_analysis=enable_behavioral_analysis)
+        self.processor = AudioProcessor(audio_dir=self.audio_dir)
         self.downloader = URLDownloader(audio_dir=self.audio_dir)
         
         # Initialize LLM evaluator with error handling
@@ -52,7 +52,6 @@ class VoiceAgentEvaluatorService:
 
         for audio_file in audio_files.files:
             path = audio_file.path
-            agent_id = audio_file.agent_id
             logger.info(f"Processing: {path}")
             
             try:
@@ -93,19 +92,19 @@ class VoiceAgentEvaluatorService:
                 
                 metrics = await loop.run_in_executor(None, self.processor.process_file, local_file_path)
 
-                # Run LLM evaluation
-                llm_evaluation = None
+                # Run combined LLM + behavioral evaluation
+                combined_evaluation = None
                 if self.llm_evaluator is None:
                     logger.warning(f"LLM Evaluator not available, skipping evaluation for {filename}")
                 else:
                     try:
-                        logger.info(f"Starting LLM evaluation for {filename} with agent_id {agent_id}")
-                        llm_evaluation = await loop.run_in_executor(None, self.llm_evaluator.run_evaluation, local_file_path, agent_id)
-                        logger.info(f"LLM evaluation completed successfully for {filename}")
+                        logger.info(f"Starting combined LLM + behavioral evaluation for {filename}")
+                        combined_evaluation = await loop.run_in_executor(None, self.llm_evaluator.run_combined_evaluation, local_file_path)
+                        logger.info(f"Combined evaluation completed successfully for {filename}")
                     except Exception as e:
-                        logger.error(f"LLM evaluation failed for {path}: {e}")
+                        logger.error(f"Combined evaluation failed for {path}: {e}")
                         logger.error(f"Full traceback: {traceback.format_exc()}")
-                        # Continue processing without LLM evaluation
+                        # Continue processing without evaluation
                 
                 # Extract latency points
                 latency_points = []
@@ -136,37 +135,38 @@ class VoiceAgentEvaluatorService:
                     elif overlap.get("interrupter") == "user":
                         user_ai_overlap_count += 1
 
-                    # Create successful response
-                    result = MetricsResponse(
-                        file_path=path,
-                        filename=filename,
-                        status="success",
-                        latency_points=latency_points,
-                        average_latency=latency_metrics.get("avg_latency", 0) * 1000,
-                        p50_latency=latency_metrics.get("p50_latency", 0) * 1000,
-                        p90_latency=latency_metrics.get("p90_latency", 0) * 1000,
-                        min_latency=latency_metrics.get("min_latency", 0) * 1000,
-                        max_latency=latency_metrics.get("max_latency", 0) * 1000,
-                        ai_interrupting_user=metrics.get("ai_interrupting_user", False),
-                        user_interrupting_ai=metrics.get("user_interrupting_ai", False),
-                        ai_user_overlap_count=ai_user_overlap_count,
-                        user_ai_overlap_count=user_ai_overlap_count,
-                        talk_ratio=metrics.get("talk_ratio", 0),
-                        average_pitch=metrics.get("average_pitch", 0),
-                        words_per_minute=metrics.get("words_per_minute", 0),
-                        hasEcho=metrics.get("hasEcho", False),
-                        echoInterrupt=metrics.get("echoInterrupt", False),
-                        hasNoise=metrics.get("hasNoise", False),
-                        noiseInterrupt=metrics.get("noiseInterrupt", False),
-                        personaAdherence=llm_evaluation.personaAdherence if llm_evaluation else None,
-                        languageSwitch=llm_evaluation.languageSwitch if llm_evaluation else None,
-                        sentiment=llm_evaluation.sentiment if llm_evaluation else None,
-                        # Add behavioral analysis results
-                        userChurnRisk=metrics.get("userChurnRisk"),
-                        userChurnReasoning=metrics.get("userChurnReasoning"),
-                        userRepetition=metrics.get("userRepetition"),
-                        agentRepetition=metrics.get("agentRepetition"),
-                    )
+                # Create successful response
+                result = MetricsResponse(
+                    file_path=path,
+                    filename=filename,
+                    status="success",
+                    latency_points=latency_points,
+                    average_latency=latency_metrics.get("avg_latency", 0) * 1000,
+                    p50_latency=latency_metrics.get("p50_latency", 0) * 1000,
+                    p90_latency=latency_metrics.get("p90_latency", 0) * 1000,
+                    min_latency=latency_metrics.get("min_latency", 0) * 1000,
+                    max_latency=latency_metrics.get("max_latency", 0) * 1000,
+                    ai_interrupting_user=metrics.get("ai_interrupting_user", False),
+                    user_interrupting_ai=metrics.get("user_interrupting_ai", False),
+                    ai_user_overlap_count=ai_user_overlap_count,
+                    user_ai_overlap_count=user_ai_overlap_count,
+                    talk_ratio=metrics.get("talk_ratio", 0),
+                    average_pitch=metrics.get("average_pitch", 0),
+                    words_per_minute=metrics.get("words_per_minute", 0),
+                    hasEcho=metrics.get("hasEcho", False),
+                    echoInterrupt=metrics.get("echoInterrupt", False),
+                    hasNoise=metrics.get("hasNoise", False),
+                    noiseInterrupt=metrics.get("noiseInterrupt", False),
+                    # behavioral analysis results
+                    languageSwitch=combined_evaluation.languageSwitch if combined_evaluation else None,
+                    sentiment=combined_evaluation.sentiment if combined_evaluation else None,
+                    userChurnRisk=combined_evaluation.userChurnRisk if combined_evaluation else None,
+                    userChurnReasoning=combined_evaluation.userChurnReasoning if combined_evaluation else None,
+                    userRepetition=combined_evaluation.userRepetition if combined_evaluation else None,
+                    agentRepetition=combined_evaluation.agentRepetition if combined_evaluation else None,
+                    taskCompletion=combined_evaluation.taskCompletion if combined_evaluation else None,
+                    taskCompletionReasoning=combined_evaluation.taskCompletionReasoning if combined_evaluation else None,
+                )
                 
                 logger.info(f"Successfully processed: {path}")
                 results.append(result)
@@ -195,7 +195,6 @@ class VoiceAgentEvaluatorService:
             
             for i, audio_file in enumerate(audio_files.files, 1):
                 path = audio_file.path
-                agent_id = audio_file.agent_id
                 logger.info(f"[{i}/{len(audio_files.files)}] Processing: {path}")
                 
                 try:
@@ -270,15 +269,15 @@ class VoiceAgentEvaluatorService:
                         elif overlap.get("interrupter") == "user":
                             user_ai_overlap_count += 1
                     
-                    llm_evaluation = None
+                    combined_evaluation = None
                     if self.llm_evaluator is not None:
                         try:
-                            logger.info(f"Starting LLM evaluation for {filename} with agent_id {agent_id}")
+                            logger.info(f"Starting combined LLM + behavioral evaluation for {filename}")
                             loop = asyncio.get_event_loop()
-                            llm_evaluation = await loop.run_in_executor(None, self.llm_evaluator.run_evaluation, local_file_path, agent_id)
-                            logger.info(f"LLM evaluation completed successfully for {filename}")
+                            combined_evaluation = await loop.run_in_executor(None, self.llm_evaluator.run_combined_evaluation, local_file_path)
+                            logger.info(f"Combined evaluation completed successfully for {filename}")
                         except Exception as e:
-                            logger.error(f"LLM evaluation failed for {path}: {e}")
+                            logger.error(f"Combined evaluation failed for {path}: {e}")
                             logger.error(f"Full traceback: {traceback.format_exc()}")
 
                     # Create successful response
@@ -303,9 +302,15 @@ class VoiceAgentEvaluatorService:
                         echoInterrupt=metrics.get("echoInterrupt", False),
                         hasNoise=metrics.get("hasNoise", False),
                         noiseInterrupt=metrics.get("noiseInterrupt", False),
-                        personaAdherence=llm_evaluation.personaAdherence if llm_evaluation else None,
-                        languageSwitch=llm_evaluation.languageSwitch if llm_evaluation else None,
-                        sentiment=llm_evaluation.sentiment if llm_evaluation else None,
+                        languageSwitch=combined_evaluation.languageSwitch if combined_evaluation else None,
+                        sentiment=combined_evaluation.sentiment if combined_evaluation else None,
+                        # Add behavioral analysis results from combined evaluation
+                        userChurnRisk=combined_evaluation.userChurnRisk if combined_evaluation else None,
+                        userChurnReasoning=combined_evaluation.userChurnReasoning if combined_evaluation else None,
+                        userRepetition=combined_evaluation.userRepetition if combined_evaluation else None,
+                        agentRepetition=combined_evaluation.agentRepetition if combined_evaluation else None,
+                        taskCompletion=combined_evaluation.taskCompletion if combined_evaluation else None,
+                        taskCompletionReasoning=combined_evaluation.taskCompletionReasoning if combined_evaluation else None,
                     )
 
                     logger.info(f"[{i}/{len(audio_files.files)}] Completed: {path}")

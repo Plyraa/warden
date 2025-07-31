@@ -426,17 +426,12 @@ class AudioVisualizer:
             </div>
             
             <div class="metrics-section">
-                <h4>LLM Evaluation Metrics</h4>
+                <h4>Gemini AI Evaluation Metrics</h4>
                 <table class="metrics-table">
                     <tr>
                         <th>Metric</th>
                         <th>Value</th>
                         <th>Description</th>
-                    </tr>
-                    <tr>
-                        <td>Persona Adherence</td>
-                        <td>{}</td>
-                        <td>How well the agent adhered to its defined persona (1-5 scale)</td>
                     </tr>
                     <tr>
                         <td>Language Switch</td>
@@ -447,6 +442,36 @@ class AudioVisualizer:
                         <td>User Sentiment</td>
                         <td>{}</td>
                         <td>Overall sentiment of the user during the conversation</td>
+                    </tr>
+                    <tr>
+                        <td>User Churn Risk</td>
+                        <td style="color: {}; font-weight: bold;">{}</td>
+                        <td>Whether customer shows churn risk indicators</td>
+                    </tr>
+                    <tr>
+                        <td>Churn Reasoning</td>
+                        <td style="font-style: italic;">{}</td>
+                        <td>Explanation for churn risk assessment</td>
+                    </tr>
+                    <tr>
+                        <td>User Repetition</td>
+                        <td style="color: {}; font-weight: bold;">{}</td>
+                        <td>Whether user shows problematic repetitive behavior</td>
+                    </tr>
+                    <tr>
+                        <td>Agent Repetition</td>
+                        <td style="color: {}; font-weight: bold;">{}</td>
+                        <td>Whether agent shows problematic repetitive behavior</td>
+                    </tr>
+                    <tr>
+                        <td>Task Completion</td>
+                        <td style="color: {}; font-weight: bold;">{}</td>
+                        <td>Whether user achieved their primary goal</td>
+                    </tr>
+                    <tr>
+                        <td>Task Completion Reasoning</td>
+                        <td style="font-style: italic;">{}</td>
+                        <td>Justification for task completion assessment</td>
                     </tr>
                 </table>
             </div>
@@ -476,10 +501,20 @@ class AudioVisualizer:
             'Yes' if metrics.get('noiseInterrupt') else 'No',
             'Yes' if metrics.get('hasEcho') else 'No',
             'Yes' if metrics.get('echoInterrupt') else 'No',
-            # LLM evaluation metrics
-            f"{metrics.get('personaAdherence', 'N/A')}/5" if metrics.get('personaAdherence') else "Not evaluated",
+            # Gemini evaluation metrics (basic)
             "Yes" if metrics.get('languageSwitch') else "No" if metrics.get('languageSwitch') is not None else "Not evaluated",
-            metrics.get('sentiment', 'Not evaluated').title() if metrics.get('sentiment') else "Not evaluated"
+            metrics.get('sentiment', 'Not evaluated').title() if metrics.get('sentiment') else "Not evaluated",
+            # Behavioral analysis metrics
+            "#dc3545" if metrics.get('userChurnRisk') else "#28a745" if metrics.get('userChurnRisk') is not None else "#666",  # Red for churn risk, green for no risk, gray for not evaluated
+            "HIGH RISK" if metrics.get('userChurnRisk') else "Low Risk" if metrics.get('userChurnRisk') is not None else "Not evaluated",
+            metrics.get('userChurnReasoning', 'No specific reasoning provided') if metrics.get('userChurnRisk') else "Customer does not show churn indicators" if metrics.get('userChurnRisk') is not None else "Not evaluated",
+            "#dc3545" if metrics.get('userRepetition') else "#28a745" if metrics.get('userRepetition') is not None else "#666",  # Red for problematic, green for good
+            "Issues Detected" if metrics.get('userRepetition') else "Good" if metrics.get('userRepetition') is not None else "Not evaluated",
+            "#dc3545" if metrics.get('agentRepetition') else "#28a745" if metrics.get('agentRepetition') is not None else "#666",  # Red for problematic, green for good
+            "Issues Detected" if metrics.get('agentRepetition') else "Good" if metrics.get('agentRepetition') is not None else "Not evaluated",
+            "#28a745" if metrics.get('taskCompletion') == "Fully Completed" else "#ffc107" if metrics.get('taskCompletion') == "Partially Completed" else "#dc3545" if metrics.get('taskCompletion') == "Not Completed" else "#666",  # Green/Yellow/Red/Gray
+            metrics.get('taskCompletion', 'Not evaluated') if metrics.get('taskCompletion') else "Not evaluated",
+            metrics.get('taskCompletionReasoning', 'No reasoning provided') if metrics.get('taskCompletionReasoning') else "Not evaluated"
         )
 
         return html

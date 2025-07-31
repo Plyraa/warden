@@ -12,10 +12,10 @@ from noise_detection import detect_noise
 
 # New LLM evaluation and noise reduction imports
 try:
-    from llm_evaluator import LlmEvaluator
+    from gemini_evaluator import GeminiEvaluator
     LLM_EVALUATOR_AVAILABLE = True
 except ImportError as e:
-    print(f"Warning: LLM Evaluator not available: {e}")
+    print(f"Warning: Gemini Evaluator not available: {e}")
     LLM_EVALUATOR_AVAILABLE = False
 
 try:
@@ -51,10 +51,10 @@ class AudioMetricsCalculator:
         self.llm_evaluator = None
         if LLM_EVALUATOR_AVAILABLE and not batch_only:
             try:
-                self.llm_evaluator = LlmEvaluator()
-                print("LLM Evaluator initialized successfully")
+                self.llm_evaluator = GeminiEvaluator()
+                print("Gemini Evaluator initialized successfully")
             except Exception as e:
-                print(f"Failed to initialize LLM Evaluator: {e}")
+                print(f"Failed to initialize Gemini Evaluator: {e}")
                 self.llm_evaluator = None
         
         # Skip ElevenLabs initialization in batch-only mode
@@ -1629,29 +1629,27 @@ class AudioMetricsCalculator:
 
     def run_llm_evaluation(self, file_path: str, agent_id: str = None):
         """
-        Run LLM evaluation on the audio file if evaluator is available
+        Run Gemini evaluation on the audio file if evaluator is available
         
         Args:
             file_path: Path to the audio file
-            agent_id: Agent ID for evaluation (optional)
+            agent_id: Agent ID for evaluation (ignored - no longer needed)
             
         Returns:
-            LLM evaluation result or None if not available
+            Gemini evaluation result or None if not available
         """
         if not self.llm_evaluator:
             return None
             
-        if not agent_id:
-            print("Warning: No agent_id provided for LLM evaluation")
-            return None
-            
         try:
-            print(f"Running LLM evaluation for {os.path.basename(file_path)} with agent_id {agent_id}")
-            evaluation = self.llm_evaluator.run_evaluation(file_path, agent_id)
-            print("LLM evaluation completed successfully")
+            print(f"Running Gemini evaluation for {os.path.basename(file_path)}")
+            # Use default language and role - no agent_id needed
+            evaluation = self.llm_evaluator.run_evaluation(file_path, language="English", role="Assistant")
+            print("Gemini evaluation completed successfully")
             return evaluation
         except Exception as e:
-            print(f"LLM evaluation failed: {e}")
+            print(f"Gemini evaluation failed: {e}")
+            print(f"Stack trace: {traceback.format_exc()}")
             return None
 
     def process_file(self, filename, source_url=None, agent_id=None):
@@ -1748,14 +1746,11 @@ class AudioMetricsCalculator:
             raw_user_vad_segments, raw_agent_vad_segments
         )
         
-        # Run LLM evaluation if agent_id is provided
-        llm_evaluation = None
-        if agent_id:
-            original_file_path = filename if os.path.isabs(filename) and os.path.exists(filename) else os.path.join(self.input_dir, filename)
-            llm_evaluation = self.run_llm_evaluation(
-                original_file_path if os.path.exists(original_file_path) else output_path, 
-                agent_id
-            )
+        # Run LLM evaluation (Gemini-based) - no agent_id needed anymore
+        original_file_path = filename if os.path.isabs(filename) and os.path.exists(filename) else os.path.join(self.input_dir, filename)
+        llm_evaluation = self.run_llm_evaluation(
+            original_file_path if os.path.exists(original_file_path) else output_path
+        )
         
         # Calculate metrics
         metrics = {
@@ -1783,11 +1778,17 @@ class AudioMetricsCalculator:
             "average_pitch": self.calculate_average_pitch(audio, sr),  # Use 48kHz audio for better pitch analysis
             "words_per_minute": self.calculate_words_per_minute(audio, sr, agent_speech_turns),
             "transcript_data": transcript_data,
-            # LLM evaluation results
+            # Gemini evaluation results (all in one)
             "llm_evaluation": llm_evaluation,
-            "personaAdherence": llm_evaluation.personaAdherence if llm_evaluation else None,
             "languageSwitch": llm_evaluation.languageSwitch if llm_evaluation else None,
             "sentiment": llm_evaluation.sentiment if llm_evaluation else None,
+            # Behavioral Analysis metrics (Gemini-based)
+            "userChurnRisk": llm_evaluation.userChurnRisk if llm_evaluation else None,
+            "userChurnReasoning": llm_evaluation.userChurnReasoning if llm_evaluation else None,
+            "userRepetition": llm_evaluation.userRepetition if llm_evaluation else None,
+            "agentRepetition": llm_evaluation.agentRepetition if llm_evaluation else None,
+            "taskCompletion": llm_evaluation.taskCompletion if llm_evaluation else None,
+            "taskCompletionReasoning": llm_evaluation.taskCompletionReasoning if llm_evaluation else None,
         }
         
         # Detect echo

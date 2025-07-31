@@ -49,10 +49,16 @@ class MetricsResponse(BaseModel):
     echoInterrupt: bool = False
     hasNoise: bool = False
     noiseInterrupt: bool = False
-    # LLM Evaluation metrics
-    personaAdherence: int = None
+    # LLM Evaluation metrics (Gemini-based)
     languageSwitch: bool = None  
     sentiment: str = None
+    # Behavioral Analysis metrics (Gemini-based)
+    userChurnRisk: bool = None
+    userChurnReasoning: str = None
+    userRepetition: bool = None
+    agentRepetition: bool = None
+    taskCompletion: str = None
+    taskCompletionReasoning: str = None
 
 
 @asynccontextmanager
@@ -273,10 +279,16 @@ def analyze_batch(audio_files: AudioFileList):
                 echoInterrupt=metrics.get("echoInterrupt", False),
                 hasNoise=metrics.get("hasNoise", False),
                 noiseInterrupt=metrics.get("noiseInterrupt", False),
-                # LLM Evaluation metrics
-                personaAdherence=metrics.get("personaAdherence"),
+                # LLM Evaluation metrics (Gemini-based)
                 languageSwitch=metrics.get("languageSwitch"),
                 sentiment=metrics.get("sentiment"),
+                # Behavioral Analysis metrics (Gemini-based)
+                userChurnRisk=metrics.get("userChurnRisk"),
+                userChurnReasoning=metrics.get("userChurnReasoning"),
+                userRepetition=metrics.get("userRepetition"),
+                agentRepetition=metrics.get("agentRepetition"),
+                taskCompletion=metrics.get("taskCompletion"),
+                taskCompletionReasoning=metrics.get("taskCompletionReasoning"),
             )
             print("MetricsResponse object created successfully")
             results.append(result)
@@ -442,10 +454,16 @@ async def analyze_batch_stream(audio_files: AudioFileList):
                     echoInterrupt=metrics.get("echoInterrupt", False),
                     hasNoise=metrics.get("hasNoise", False),
                     noiseInterrupt=metrics.get("noiseInterrupt", False),
-                    # LLM Evaluation metrics
-                    personaAdherence=metrics.get("personaAdherence"),
+                    # LLM Evaluation metrics (Gemini-based)
                     languageSwitch=metrics.get("languageSwitch"),
                     sentiment=metrics.get("sentiment"),
+                    # Behavioral Analysis metrics (Gemini-based)
+                    userChurnRisk=metrics.get("userChurnRisk"),
+                    userChurnReasoning=metrics.get("userChurnReasoning"),
+                    userRepetition=metrics.get("userRepetition"),
+                    agentRepetition=metrics.get("agentRepetition"),
+                    taskCompletion=metrics.get("taskCompletion"),
+                    taskCompletionReasoning=metrics.get("taskCompletionReasoning"),
                 )
 
                 print(f"[{i}/{len(files_to_process)}] Completed: {path}")

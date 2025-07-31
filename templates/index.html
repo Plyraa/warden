@@ -263,11 +263,6 @@
                     </select>
                 </div>
                 
-                <div class="input-group">
-                    <label for="agentId">Agent ID (optional for LLM evaluation):</label>
-                    <input type="text" id="agentId" placeholder="Enter agent ID for persona/sentiment analysis">
-                </div>
-                
                 <div class="checkbox-group">
                     <input type="checkbox" id="enableNoiseReduction">
                     <label for="enableNoiseReduction">Enable Noise Reduction (experimental)</label>
@@ -359,7 +354,6 @@
                 resultContainer.style.display = 'none';
                 
                 const audioFile = document.getElementById('audioFile').value;
-                const agentId = document.getElementById('agentId').value;
                 const enableNoiseReduction = document.getElementById('enableNoiseReduction').checked;
                 
                 fetch('/analyze_audio', {
@@ -369,7 +363,6 @@
                     },
                     body: JSON.stringify({ 
                         audioFile: audioFile,
-                        agentId: agentId,
                         enableNoiseReduction: enableNoiseReduction
                     }),
                 })

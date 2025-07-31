@@ -77,14 +77,13 @@ def serve_audio(filename):
 def analyze_audio():
     data = request.get_json()
     audio_file = data.get("audioFile")
-    agent_id = data.get("agentId")  # Get agent ID from request
     enable_noise_reduction = data.get("enableNoiseReduction", False)  # Get noise reduction setting
     
     # Create calculator with noise reduction setting
     calculator_instance = AudioMetricsCalculator(enable_noise_reduction=enable_noise_reduction)
 
-    # Process the audio file with agent ID if provided
-    metrics = calculator_instance.process_file(audio_file, agent_id=agent_id)
+    # Process the audio file (no agent_id needed anymore)
+    metrics = calculator_instance.process_file(audio_file)
 
     # Generate visualizations
     output_path = metrics["downsampled_path"]

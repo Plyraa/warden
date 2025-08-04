@@ -25,8 +25,8 @@ class CombinedEvaluationResult(BaseModel):
     languageSwitch: bool = Field(..., description="Whether the agent switched languages.")
     sentiment: Literal["happy", "neutral", "angry", "disappointed"] = Field(..., description="The user's sentiment.")
     # Behavioral Analysis results
-    userChurnRisk: bool = Field(..., description="Whether the customer shows genuine churn risk indicators")
-    userChurnReasoning: Optional[str] = Field(None, description="1-2 short sentences explaining the churn risk assessment")
+    negativeExperience: bool = Field(..., description="Whether the user shows negative experience indicators")
+    negativeExperienceReasoning: Optional[str] = Field(None, description="1-2 short sentences explaining the negative experience assessment")
     userRepetition: bool = Field(..., description="Whether user shows problematic repetitive behavior")
     agentRepetition: bool = Field(..., description="Whether agent shows problematic repetitive behavior")
     taskCompletion: Literal["Fully Completed", "Partially Completed", "Not Completed"] = Field(..., description="Whether the user achieved their primary goal by the end of the call")
@@ -106,13 +106,13 @@ class LlmEvaluator:
                     "description": "The user's overall sentiment during the conversation"
                 },
                 # Behavioral Analysis fields
-                "userChurnRisk": {
+                "negativeExperience": {
                     "type": "BOOLEAN",
-                    "description": "Whether the customer shows EXPLICIT dissatisfaction with service AND clear intent to stop using it (requires both harsh criticism AND intent to leave)"
+                    "description": "Whether the user shows explicit expressions of strong dissatisfaction that indicate significant service quality issues"
                 },
-                "userChurnReasoning": {
+                "negativeExperienceReasoning": {
                     "type": "STRING",
-                    "description": "1-2 short sentences explaining the specific churn indicators (null if no churn risk)"
+                    "description": "1-2 short sentences explaining the specific negative experience indicators (null if no negative experience)"
                 },
                 "userRepetition": {
                     "type": "BOOLEAN",
@@ -132,8 +132,8 @@ class LlmEvaluator:
                     "description": "One-sentence justification for the task completion assessment"
                 }
             },
-            "required": ["languageSwitch", "sentiment", "userChurnRisk", "userRepetition", "agentRepetition", "taskCompletion", "taskCompletionReasoning"],
-            "propertyOrdering": ["languageSwitch", "sentiment", "userChurnRisk", "userChurnReasoning", "userRepetition", "agentRepetition", "taskCompletion", "taskCompletionReasoning"]
+            "required": ["languageSwitch", "sentiment", "negativeExperience", "userRepetition", "agentRepetition", "taskCompletion", "taskCompletionReasoning"],
+            "propertyOrdering": ["languageSwitch", "sentiment", "negativeExperience", "negativeExperienceReasoning", "userRepetition", "agentRepetition", "taskCompletion", "taskCompletionReasoning"]
         }
 
     def _call_gemini_via_proxy(self, prompt: str, audio_file_path: str = None, response_schema: dict = None) -> str:
@@ -249,14 +249,13 @@ class LlmEvaluator:
             print(f"An unexpected error occurred: {e}")
             raise
 
-    def gemini_semantic_analysis(self, audio_file_path: str, language: str = "English", role: str = "Assistant") -> Optional[CombinedEvaluationResult]:
+    def gemini_semantic_analysis(self, audio_file_path: str, language: str = "English") -> Optional[CombinedEvaluationResult]:
         """
         Perform complete semantic analysis using Gemini multimodal (LLM + behavioral analysis in one call)
         
         Args:
             audio_file_path: Path to the audio file to analyze
             language: Expected language for the conversation
-            role: Agent's role description
             
         Returns:
             CombinedEvaluationResult or None if analysis fails
@@ -268,7 +267,7 @@ class LlmEvaluator:
                 raise FileNotFoundError(f"Audio file not found: {audio_file_path}")
             
             # Create the combined prompt for complete analysis
-            combined_prompt = self._create_combined_prompt(language, role)
+            combined_prompt = self._create_combined_prompt(language)
             
             # Get the response schema for structured output
             response_schema = self._get_combined_response_schema()
@@ -287,8 +286,8 @@ class LlmEvaluator:
                 result = CombinedEvaluationResult(
                     languageSwitch=response_json.get('languageSwitch', False),
                     sentiment=response_json.get('sentiment', 'neutral'),
-                    userChurnRisk=response_json.get('userChurnRisk', False),
-                    userChurnReasoning=response_json.get('userChurnReasoning'),
+                    negativeExperience=response_json.get('negativeExperience', False),
+                    negativeExperienceReasoning=response_json.get('negativeExperienceReasoning'),
                     userRepetition=response_json.get('userRepetition', False),
                     agentRepetition=response_json.get('agentRepetition', False),
                     taskCompletion=response_json.get('taskCompletion', 'Not Completed'),
@@ -298,9 +297,9 @@ class LlmEvaluator:
                 print("✅ Gemini semantic analysis completed successfully:")
                 print(f"  - Language Switch: {result.languageSwitch}")
                 print(f"  - Sentiment: {result.sentiment}")
-                print(f"  - User Churn Risk: {result.userChurnRisk}")
-                if result.userChurnReasoning:
-                    print(f"  - Churn Reasoning: {result.userChurnReasoning}")
+                print(f"  - Negative Experience: {result.negativeExperience}")
+                if result.negativeExperienceReasoning:
+                    print(f"  - Negative Experience Reasoning: {result.negativeExperienceReasoning}")
                 print(f"  - User Repetition: {result.userRepetition}")
                 print(f"  - Agent Repetition: {result.agentRepetition}")
                 print(f"  - Task Completion: {result.taskCompletion}")
@@ -318,40 +317,14 @@ class LlmEvaluator:
             print(f"Stack trace: {traceback.format_exc()}")
             return None
 
-    def _create_combined_prompt(self, language: str = "English", role: str = "Assistant") -> str:
+    def _create_combined_prompt(self, language: str = "English") -> str:
         """Create the combined prompt for complete semantic analysis from YAML templates"""
-        # Use the unified system prompt and both evaluation templates
-        system_prompt = self.prompts.get("system_prompt", "")
-        user_prompt_template = self.prompts.get("user_prompt_template", "")
-        behavioral_template = self.prompts.get("behavioral_analysis_template", "")
-        
-        # Create combined prompt that includes both LLM and behavioral analysis
-        combined_prompt = f"""
-{system_prompt}
-
-EVALUATION TASK:
-Analyze the provided audio conversation for complete semantic analysis including language patterns, sentiment, and behavioral indicators.
-
-AGENT SPECIFICATIONS:
-- Required Language: {language}
-- Agent Role: {role}
-
-{user_prompt_template}
-
-{behavioral_template}
-
-IMPORTANT NOTES:
-- Analyze the actual audio conversation directly
-- Use audio context and conversation flow to identify who is speaking
-- Consider the entire conversation flow, not isolated statements
-- Focus on both agent performance and user experience
-- Listen for vocal tone, sentiment, and communication effectiveness
-"""
+        # Use the unified behavioral_task_prompt from YAML
+        behavioral_task_prompt = self.prompts.get("behavioral_task_prompt", "")
         
         # Format the template with provided values
-        formatted_prompt = combined_prompt.format(
-            language=language,
-            role=role
+        formatted_prompt = behavioral_task_prompt.format(
+            language=language
         )
         
         # Note: No need to add JSON schema instructions since we're using responseSchema
@@ -359,23 +332,23 @@ IMPORTANT NOTES:
         
         return formatted_prompt
 
-    def run_combined_evaluation(self, file_path: str, language: str = "English", role: str = "Assistant") -> CombinedEvaluationResult:
+    def run_combined_evaluation(self, file_path: str, language: str = "English") -> CombinedEvaluationResult:
         """
         Runs complete semantic analysis using Gemini for a given audio file.
         """
         print(f"\n===== Starting Combined Semantic Evaluation for {os.path.basename(file_path)} =====")
         
         # Run complete semantic analysis using Gemini
-        result = self.gemini_semantic_analysis(file_path, language, role)
+        result = self.gemini_semantic_analysis(file_path, language)
         
         if not result:
             print("❌ Semantic analysis failed. Using default values.")
             # Return default values if analysis fails
             result = CombinedEvaluationResult(
                 languageSwitch=False,
-                sentiment="neutral",
-                userChurnRisk=False,
-                userChurnReasoning=None,
+                sentiment="null",
+                negativeExperience=False,
+                negativeExperienceReasoning=None,
                 userRepetition=False,
                 agentRepetition=False,
                 taskCompletion="Not Completed",
@@ -385,7 +358,7 @@ IMPORTANT NOTES:
         print(f"===== Combined Semantic Evaluation for {os.path.basename(file_path)} Complete =====\n")
         return result
 
-    def run_evaluation(self, file_path: str, language: str = "English", role: str = "Assistant") -> LlmEvaluationResult:
+    def run_evaluation(self, file_path: str, language: str = "English") -> LlmEvaluationResult:
         """
         Runs basic LLM evaluation using Gemini for a given audio file.
         
@@ -395,14 +368,14 @@ IMPORTANT NOTES:
         print(f"\n===== Starting Basic LLM Evaluation for {os.path.basename(file_path)} =====")
         
         # Run complete semantic analysis and extract LLM parts
-        combined_result = self.gemini_semantic_analysis(file_path, language, role)
+        combined_result = self.gemini_semantic_analysis(file_path, language)
         
         if not combined_result:
             print("❌ Semantic analysis failed. Using default values.")
             # Return default values if analysis fails
             basic_result = LlmEvaluationResult(
                 languageSwitch=False,
-                sentiment="neutral"
+                sentiment="null"
             )
         else:
             # Extract only LLM evaluation fields
@@ -414,14 +387,13 @@ IMPORTANT NOTES:
         print(f"===== Basic LLM Evaluation for {os.path.basename(file_path)} Complete =====\n")
         return basic_result
 
-    def analyze_batch_semantic(self, audio_files: list[str], language: str = "English", role: str = "Assistant") -> Dict[str, Optional[CombinedEvaluationResult]]:
+    def analyze_batch_semantic(self, audio_files: list[str], language: str = "English") -> Dict[str, Optional[CombinedEvaluationResult]]:
         """
         Analyze multiple audio files for complete semantic analysis using Gemini
         
         Args:
             audio_files: List of audio file paths
             language: Expected language for the conversation
-            role: Agent's role description
             
         Returns:
             Dictionary mapping file paths to analysis results
@@ -435,7 +407,7 @@ IMPORTANT NOTES:
             print(f"\n📊 Processing file {i}/{total_files}: {os.path.basename(file_path)}")
             
             try:
-                result = self.gemini_semantic_analysis(file_path, language, role)
+                result = self.gemini_semantic_analysis(file_path, language)
                 results[file_path] = result
                 
                 if result:

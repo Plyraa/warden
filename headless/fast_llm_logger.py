@@ -15,7 +15,7 @@ from typing import List, Dict, Any
 from llm_evaluator import LlmEvaluator
 
 # Configuration
-AUDIO_FILES_DIR = r"C:\Users\ArdAlp\Downloads\high_lat"  # TODO: Update this to your audio files directory
+AUDIO_FILES_DIR = r"C:\Users\Plyra\Downloads\high_lat"  # TODO: Update this to your audio files directory
 INPUT_CSV = "test_input.csv"  # TODO: Update this to your input CSV file path
 OUTPUT_DIR = "csv_outputs"
 CSV_FILENAME = f"llm_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
@@ -30,8 +30,8 @@ CSV_HEADERS = [
     'languageSwitch',
     'sentiment',
     # Behavioral Analysis metrics
-    'userChurnRisk',
-    'userChurnReasoning',
+    'negativeExperience',
+    'negativeExperienceReasoning',
     'userRepetition',
     'agentRepetition',
     'taskCompletion',
@@ -99,8 +99,8 @@ def process_file_llm_evaluation(evaluator: LlmEvaluator, file_path: str) -> Dict
                 'languageSwitch': result.languageSwitch,
                 'sentiment': result.sentiment,
                 # Behavioral Analysis results
-                'userChurnRisk': result.userChurnRisk,
-                'userChurnReasoning': result.userChurnReasoning,
+                'negativeExperience': result.negativeExperience,
+                'negativeExperienceReasoning': result.negativeExperienceReasoning,
                 'userRepetition': result.userRepetition,
                 'agentRepetition': result.agentRepetition,
                 'taskCompletion': result.taskCompletion,
@@ -115,8 +115,8 @@ def process_file_llm_evaluation(evaluator: LlmEvaluator, file_path: str) -> Dict
                 'error_message': 'Evaluation returned no results',
                 'languageSwitch': None,
                 'sentiment': None,
-                'userChurnRisk': None,
-                'userChurnReasoning': None,
+                'negativeExperience': None,
+                'negativeExperienceReasoning': None,
                 'userRepetition': None,
                 'agentRepetition': None,
                 'taskCompletion': None,
@@ -136,8 +136,8 @@ def process_file_llm_evaluation(evaluator: LlmEvaluator, file_path: str) -> Dict
             'error_message': error_msg,
             'languageSwitch': None,
             'sentiment': None,
-            'userChurnRisk': None,
-            'userChurnReasoning': None,
+            'negativeExperience': None,
+            'negativeExperienceReasoning': None,
             'userRepetition': None,
             'agentRepetition': None,
             'taskCompletion': None,
@@ -172,7 +172,7 @@ def process_batch_llm_evaluation(audio_files: List[str]) -> List[Dict[str, Any]]
             print(f"✅ {result['filename']}:")
             print(f"   Language Switch: {result['languageSwitch']}")
             print(f"   Sentiment: {result['sentiment']}")
-            print(f"   Churn Risk: {result['userChurnRisk']}")
+            print(f"   Negative Experience: {result['negativeExperience']}")
             print(f"   Task Completion: {result['taskCompletion']}")
         else:
             print(f"❌ {result['filename']}: {result['error_message']}")
@@ -223,7 +223,7 @@ def print_summary(results: List[Dict[str, Any]]):
                 sentiment_counts[sentiment] = sentiment_counts.get(sentiment, 0) + 1
         
         # Behavioral Analysis metrics
-        churn_risk_count = sum(1 for r in successful if r.get('userChurnRisk'))
+        negative_exp_count = sum(1 for r in successful if r.get('negativeExperience'))
         user_repetition_count = sum(1 for r in successful if r.get('userRepetition'))
         agent_repetition_count = sum(1 for r in successful if r.get('agentRepetition'))
         
@@ -245,7 +245,7 @@ def print_summary(results: List[Dict[str, Any]]):
             print(f"   {sentiment}: {count} files ({percentage:.1f}%)")
         
         print(f"\n🧠 BEHAVIORAL ANALYSIS RESULTS:")
-        print(f"🚨 Churn Risk Detected: {churn_risk_count}/{len(successful)} files ({churn_risk_count/len(successful)*100:.1f}%)")
+        print(f"⚠️ Negative Experience Detected: {negative_exp_count}/{len(successful)} files ({negative_exp_count/len(successful)*100:.1f}%)")
         print(f"🔄 User Repetition: {user_repetition_count}/{len(successful)} files ({user_repetition_count/len(successful)*100:.1f}%)")
         print(f"🤖 Agent Repetition: {agent_repetition_count}/{len(successful)} files ({agent_repetition_count/len(successful)*100:.1f}%)")
         
@@ -296,7 +296,7 @@ def main():
         
         print(f"\n✅ LLM evaluation complete!")
         print(f"📄 CSV file: {os.path.abspath(csv_output_path)}")
-        print(f"💡 Complete analysis: Language switch, sentiment, churn risk, repetition, and task completion")
+        print(f"💡 Complete analysis: Language switch, sentiment, negative experience, repetition, and task completion")
     else:
         print("❌ No results to save")
 

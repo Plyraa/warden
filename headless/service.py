@@ -160,8 +160,8 @@ class VoiceAgentEvaluatorService:
                     # behavioral analysis results
                     languageSwitch=combined_evaluation.languageSwitch if combined_evaluation else None,
                     sentiment=combined_evaluation.sentiment if combined_evaluation else None,
-                    userChurnRisk=combined_evaluation.userChurnRisk if combined_evaluation else None,
-                    userChurnReasoning=combined_evaluation.userChurnReasoning if combined_evaluation else None,
+                    negativeExperience=combined_evaluation.negativeExperience if combined_evaluation else None,
+                    negativeExperienceReasoning=combined_evaluation.negativeExperienceReasoning if combined_evaluation else None,
                     userRepetition=combined_evaluation.userRepetition if combined_evaluation else None,
                     agentRepetition=combined_evaluation.agentRepetition if combined_evaluation else None,
                     taskCompletion=combined_evaluation.taskCompletion if combined_evaluation else None,
@@ -305,8 +305,8 @@ class VoiceAgentEvaluatorService:
                         languageSwitch=combined_evaluation.languageSwitch if combined_evaluation else None,
                         sentiment=combined_evaluation.sentiment if combined_evaluation else None,
                         # Add behavioral analysis results from combined evaluation
-                        userChurnRisk=combined_evaluation.userChurnRisk if combined_evaluation else None,
-                        userChurnReasoning=combined_evaluation.userChurnReasoning if combined_evaluation else None,
+                        negativeExperience=combined_evaluation.negativeExperience if combined_evaluation else None,
+                        negativeExperienceReasoning=combined_evaluation.negativeExperienceReasoning if combined_evaluation else None,
                         userRepetition=combined_evaluation.userRepetition if combined_evaluation else None,
                         agentRepetition=combined_evaluation.agentRepetition if combined_evaluation else None,
                         taskCompletion=combined_evaluation.taskCompletion if combined_evaluation else None,

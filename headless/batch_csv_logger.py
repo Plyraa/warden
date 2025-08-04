@@ -48,8 +48,8 @@ CSV_HEADERS = [
     'noiseInterrupt',
     'languageSwitch',
     'sentiment',
-    'userChurnRisk',
-    'userChurnReasoning',
+    'negativeExperience',
+    'negativeExperienceReasoning',
     'userRepetition',
     'agentRepetition',
     'taskCompletion',
@@ -180,7 +180,7 @@ def print_results_table(results: List[Dict[str, Any]]):
     print("=" * 140)
     
     # Define column headers and widths
-    headers = ["Filename", "Status", "Latency", "Ratio", "Echo", "Noise", "Sentiment", "Churn", "AgentRep", "UserRep", "TaskComp"]
+    headers = ["Filename", "Status", "Latency", "Ratio", "Echo", "Noise", "Sentiment", "NegExp", "AgentRep", "UserRep", "TaskComp"]
     widths = [22, 8, 10, 8, 6, 6, 10, 8, 9, 8, 12]
     
     # Print header
@@ -216,13 +216,13 @@ def print_results_table(results: List[Dict[str, Any]]):
         # Handle optional fields
         sentiment = result.get('sentiment', 'N/A')[:10] if result.get('sentiment') else 'N/A'
         
-        churn_risk = result.get('userChurnRisk')
-        if churn_risk is True:
-            churn = "⚠️ YES"
-        elif churn_risk is False:
-            churn = "✅ NO"
+        negative_exp = result.get('negativeExperience')
+        if negative_exp is True:
+            neg_exp = "⚠️ YES"
+        elif negative_exp is False:
+            neg_exp = "✅ NO"
         else:
-            churn = "N/A"
+            neg_exp = "N/A"
         
         agent_rep = result.get('agentRepetition')
         if agent_rep is True:
@@ -252,7 +252,7 @@ def print_results_table(results: List[Dict[str, Any]]):
             task_comp_str = "N/A"
         
         # Prepare row data
-        row_data = [filename, status, latency, ratio, echo, noise, sentiment, churn, agent_rep_str, user_rep_str, task_comp_str]
+        row_data = [filename, status, latency, ratio, echo, noise, sentiment, neg_exp, agent_rep_str, user_rep_str, task_comp_str]
         
         # Print row
         row_line = "│"

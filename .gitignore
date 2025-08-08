@@ -10,3 +10,8 @@ env/
 venv/
 presentation/
 temp/
+headless/audio_examples/019880e446537c939277399b3db7eb8ccd46.mp3
+headless/audio_examples/10787666326893b013a11d06.73658888.mp3
+headless/audio_examples/0198829e10e97f6ca6979330e265398c2caf.mp3
+.gitignore
+headless/audio_examples/0198327f289c769fae3d79a56f51193128c4.mp3

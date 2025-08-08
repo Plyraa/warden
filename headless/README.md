@@ -25,7 +25,14 @@ python app.py
 - **Audio Quality**: Noise and echo detection
 - **Speaking Patterns**: Pitch analysis and words per minute
 
-### 🧠 **AI-Powered Semantic Analysis**
+### � **Scripted Initialization Analysis**
+- Detects early scripted transitions (attempt2, attempt1, terminate, verification, disclaimer, first_agent_message)
+- Supports conversation types: shared-phone, private-phone, web-audio, presentation
+- Matches templates from `audio_files/` (prefers MP3, falls back to WAV)
+- Merges agent VAD segments with ≤1.5s gaps before matching for robustness
+- Produces `initial_latency_points` with interval latencies per stage (seconds)
+
+### �🧠 **AI-Powered Semantic Analysis**
 - **Language Switch Detection**: Identifies when agents switch languages
 - **Sentiment Analysis**: Categorizes user sentiment (happy, neutral, angry, disappointed)
 - **Churn Risk Assessment**: Detects customers at risk of leaving (strict criteria)
@@ -42,7 +49,7 @@ python app.py
 
 ### Health Check
 ```bash
-GET /health
+GET /isAlive
 ```
 
 ### Batch Processing (Complete Analysis)
@@ -52,11 +59,17 @@ Content-Type: application/json
 
 {
   "files": [
-    "audio1.mp3",
-    "/absolute/path/to/audio2.wav", 
-    "https://example.com/audio3.mp3"
+    { "path": "audio1.mp3", "conversation_type": "shared-phone" },
+    { "path": "/absolute/path/to/audio2.wav", "conversation_type": "private-phone" },
+    { "path": "https://example.com/audio3.mp3", "conversation_type": "web-audio" }
   ]
 }
+```
+
+Behavioral (LLM) metrics are optional. Enable with a query parameter:
+
+```bash
+POST /batch?run_behavioral=true
 ```
 
 ### Streaming Batch Processing (Real-time Results)
@@ -65,7 +78,10 @@ POST /batch-stream
 Content-Type: application/json
 
 {
-  "files": ["file1.mp3", "file2.mp3"]
+  "files": [
+    { "path": "file1.mp3", "conversation_type": "presentation" },
+    { "path": "file2.mp3" }
+  ]
 }
 ```
 
@@ -108,6 +124,15 @@ Each processed file returns comprehensive analysis:
   "hasEcho": false,
   "echoInterrupt": false,
   
+  // Scripted Initialization Analysis
+  "conversation_type": "shared-phone",
+  "initial_latency_points": {
+    "attempt2": 0.60,
+    "attempt1": 2.00,
+    "verification": 1.80,
+    "first_agent_message": 1.70
+  },
+  
   // AI Semantic Analysis
   "languageSwitch": false,
   "sentiment": "happy",
@@ -144,6 +169,12 @@ Each processed file returns comprehensive analysis:
 | `noiseInterrupt` | Boolean: Noise interrupted the agent |
 | `hasEcho` | Boolean: Echo was detected |
 | `echoInterrupt` | Boolean: Echo interrupted the agent |
+
+#### Scripted Initialization Analysis
+| Field | Description |
+|-------|-------------|
+| `conversation_type` | The provided conversation type string (e.g., `shared-phone`, `private-phone`, `web-audio`, `presentation`, or any custom string). Unknown/custom types are handled like web-audio but preserved as-is. |
+| `initial_latency_points` | Dictionary of interval latencies in seconds for detected stages. Keys may include: `attempt2`, `attempt1`, `verification`, `disclaimer`, `first_agent_message`, `terminate`. |
 
 #### AI Semantic Analysis
 | Field | Description |
@@ -206,6 +237,52 @@ class Config:
 - **Neutral**: Factual exchanges, no strong emotional indicators
 - **Angry**: Frustration, harsh language, complaints, aggressive tone
 - **Disappointed**: Unmet expectations, mild frustration, resigned acceptance
+## 🎬 Scripted Initialization Analysis Details
+
+This analysis identifies early scripted transitions using template matching on the agent (right) channel and agent VAD timing. It produces interval latencies (in seconds) for key stages and adds them to `initial_latency_points`.
+
+Supported conversation types (set per file input):
+- `shared-phone`
+- `private-phone`
+- `web-audio`
+- `presentation`
+
+Type handling:
+- For `shared-phone`, the analyzer tries to match templates `attempt2`, `attempt1`, `terminate` (and `redirect` ⇒ `disclaimer`) from `audio_files/` (MP3 preferred, WAV fallback). It merges agent segments with ≤1.5s gaps before matching. If no templates match, it falls back to: `verification` (first agent segment), `first_agent_message` (second agent segment).
+- For `private-phone`, no template match is required. It reports two latencies: `verification` (to 1st agent segment), `first_agent_message` (from end of 1st to start of 2nd agent segment).
+- For `web-audio` and `presentation`, it reports only `first_agent_message` latency (to the first agent segment).
+- Auto-detection: If type is `web-audio`/`presentation` but templates appear in early segments, the analyzer switches to shared-phone logic automatically.
+
+Matching method & logs:
+- MFCC + DTW (cosine) distance; lower is better. Acceptance threshold is configurable.
+- Logs print per-segment distances and an approximate similarity for each template, plus the best match for that segment.
+
+Configuration knobs (in `scripted_analysis.py`):
+- `TEMPLATE_EXTS`: order of template extensions to try (default `[".mp3", ".wav"]`).
+- `DTW_ACCEPTANCE_THRESHOLD`: match acceptance threshold (default `0.0150`). Lower is stricter.
+- `MAX_TEMPLATE_CHECKS`: number of leading agent segments to attempt matching (default `6`).
+- `MIN_SEGMENT_SECONDS`: skip matching on very short segments (default `0.15`).
+- `PRINT_SIMILARITY_SCORES`: print detailed per-template distances and best match (default `True`).
+- Agent VAD segments are merged with a 1.5s max gap before matching.
+
+Output examples:
+- Shared-phone with attempt2 → attempt1 → verification → first_agent_message:
+  `{ "attempt2": 0.60, "attempt1": 2.00, "verification": 1.80, "first_agent_message": 1.70 }`
+- Shared-phone bad path (attempt2 → attempt1 → terminate):
+  `{ "attempt2": 0.60, "attempt1": 2.00, "terminate": 1.50 }`
+- Private-phone:
+  `{ "verification": 0.80, "first_agent_message": 2.10 }`
+- Web/presentation:
+  `{ "first_agent_message": 0.75 }`
+
+Providing type in requests:
+- Include `conversation_type` per file:
+  - `shared-phone`, `private-phone`, `web-audio`, `presentation`
+  - Unknown values (e.g., `whatsapp`) are treated like `web-audio` but preserved in the response.
+
+CSV batch usage:
+- `test_input.csv` can include an optional `conversation_type` column. The batch logger forwards it to the API and includes `conversation_type` and `initial_latency_points` in the output CSV.
+
 ## 🚀 Production Deployment
 
 ### Standard Deployment

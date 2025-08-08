@@ -44,8 +44,12 @@ async def is_alive():
 
 @app.post("/batch", response_model=BatchMetricsResponse)
 async def get_batch_metrics(
-    audio_files: AudioFileList, 
-    authenticated: bool = Depends(requestAuthenticator)
+    audio_files: AudioFileList,
+    authenticated: bool = Depends(requestAuthenticator),
+    run_behavioral: bool = Query(
+        default=False,
+        description="If true, runs LLM-based behavioral metrics (language/sentiment/task). Defaults to false for compliance."
+    ),
 ):
     """
     Batch analyze multiple audio files
@@ -55,12 +59,16 @@ async def get_batch_metrics(
     
     All analysis now includes complete semantic evaluation (language, sentiment, behavioral analysis, task completion).
     """
-    return await service.analyze_batch(audio_files)
+    return await service.analyze_batch(audio_files, run_behavioral=run_behavioral)
 
 @app.post("/batch-stream")
 async def get_batch_metrics_stream(
-    audio_files: AudioFileList, 
-    authenticated: bool = Depends(requestAuthenticator)
+    audio_files: AudioFileList,
+    authenticated: bool = Depends(requestAuthenticator),
+    run_behavioral: bool = Query(
+        default=False,
+        description="If true, runs LLM-based behavioral metrics (language/sentiment/task) while streaming. Defaults to false."
+    ),
 ):
     """
     Stream analyze multiple audio files - returns results as they complete
@@ -71,7 +79,7 @@ async def get_batch_metrics_stream(
     
     All analysis now includes complete semantic evaluation (language, sentiment, behavioral analysis, task completion).
     """
-    return await service.analyze_batch_strem(audio_files)
+    return await service.analyze_batch_strem(audio_files, run_behavioral=run_behavioral)
 
 if __name__ == "__main__":
     uvicorn.run(app, port=8030, host= "0.0.0.0")

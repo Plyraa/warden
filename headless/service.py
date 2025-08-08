@@ -9,6 +9,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 
 from schemas import AudioFileList, MetricsResponse, BatchMetricsResponse
+from scripted_analysis import analyze_scripted_initialization
 from noise_detection import detect_noise
 from audio_processor import AudioProcessor
 from url_downloader import URLDownloader
@@ -33,16 +34,23 @@ class VoiceAgentEvaluatorService:
         self.audio_dir.mkdir(parents=True, exist_ok=True)
         self.processor = AudioProcessor(audio_dir=self.audio_dir)
         self.downloader = URLDownloader(audio_dir=self.audio_dir)
-        
-        # Initialize LLM evaluator with error handling
+        # Lazy-init: don't construct LLM evaluator until explicitly requested
+        self.llm_evaluator: LlmEvaluator | None = None
+
+    def _ensure_llm_evaluator(self) -> bool:
+        """Initialize LLM evaluator on-demand. Returns True if available."""
+        if self.llm_evaluator is not None:
+            return True
         try:
             self.llm_evaluator = LlmEvaluator()
-            logger.info("✅ LLM Evaluator initialized successfully")
+            logger.info("✅ LLM Evaluator initialized successfully (on-demand)")
+            return True
         except Exception as e:
-            logger.error(f"❌ Failed to initialize LLM Evaluator: {e}")
+            logger.warning(f"⚠️ LLM Evaluator unavailable: {e}")
             self.llm_evaluator = None
+            return False
 
-    async def analyze_batch(self, audio_files: AudioFileList):
+    async def analyze_batch(self, audio_files: AudioFileList, run_behavioral: bool = False):
         print(audio_files)
         results = []
         downloaded_files: list[str] = []  # Track any files pulled from remote URLs
@@ -52,6 +60,7 @@ class VoiceAgentEvaluatorService:
 
         for audio_file in audio_files.files:
             path = audio_file.path
+            conversation_type = getattr(audio_file, 'conversation_type', None)
             logger.info(f"Processing: {path}")
             
             try:
@@ -92,19 +101,20 @@ class VoiceAgentEvaluatorService:
                 
                 metrics = await loop.run_in_executor(None, self.processor.process_file, local_file_path)
 
-                # Run combined LLM + behavioral evaluation
+                # Run combined LLM + behavioral evaluation (conditional)
                 combined_evaluation = None
-                if self.llm_evaluator is None:
-                    logger.warning(f"LLM Evaluator not available, skipping evaluation for {filename}")
-                else:
-                    try:
-                        logger.info(f"Starting combined LLM + behavioral evaluation for {filename}")
-                        combined_evaluation = await loop.run_in_executor(None, self.llm_evaluator.run_combined_evaluation, local_file_path)
-                        logger.info(f"Combined evaluation completed successfully for {filename}")
-                    except Exception as e:
-                        logger.error(f"Combined evaluation failed for {path}: {e}")
-                        logger.error(f"Full traceback: {traceback.format_exc()}")
-                        # Continue processing without evaluation
+                if run_behavioral:
+                    if not self._ensure_llm_evaluator():
+                        logger.warning(f"LLM Evaluator not available, skipping evaluation for {filename}")
+                    else:
+                        try:
+                            logger.info(f"Starting combined LLM + behavioral evaluation for {filename}")
+                            combined_evaluation = await loop.run_in_executor(None, self.llm_evaluator.run_combined_evaluation, local_file_path)
+                            logger.info(f"Combined evaluation completed successfully for {filename}")
+                        except Exception as e:
+                            logger.error(f"Combined evaluation failed for {path}: {e}")
+                            logger.error(f"Full traceback: {traceback.format_exc()}")
+                            # Continue processing without evaluation
                 
                 # Extract latency points
                 latency_points = []
@@ -135,6 +145,19 @@ class VoiceAgentEvaluatorService:
                     elif overlap.get("interrupter") == "user":
                         user_ai_overlap_count += 1
 
+                # Scripted initialization analysis
+                initial_latency_points = {}
+                resolved_type = conversation_type if 'conversation_type' in locals() and conversation_type else None
+                try:
+                    initial_latency_points, resolved_type = analyze_scripted_initialization(
+                        metrics.get("combined_speaker_turns", []),
+                        metrics.get("agent_vad_segments", []),
+                        metrics.get("processed_path", local_file_path),
+                        conversation_type,
+                    )
+                except Exception as e:
+                    logger.warning(f"Scripted analysis failed for {filename}: {e}")
+
                 # Create successful response
                 result = MetricsResponse(
                     file_path=path,
@@ -157,7 +180,10 @@ class VoiceAgentEvaluatorService:
                     echoInterrupt=metrics.get("echoInterrupt", False),
                     hasNoise=metrics.get("hasNoise", False),
                     noiseInterrupt=metrics.get("noiseInterrupt", False),
-                    # behavioral analysis results
+                    # Scripted init metrics
+                    conversation_type=resolved_type,
+                    initial_latency_points=initial_latency_points,
+                    # behavioral analysis results (conditionally present)
                     languageSwitch=combined_evaluation.languageSwitch if combined_evaluation else None,
                     sentiment=combined_evaluation.sentiment if combined_evaluation else None,
                     negativeExperience=combined_evaluation.negativeExperience if combined_evaluation else None,
@@ -187,7 +213,7 @@ class VoiceAgentEvaluatorService:
         logger.info(f"Batch processing complete, returning {len(results)} results")
         return BatchMetricsResponse(results=results)
 
-    async def analyze_batch_strem(self, audio_files: AudioFileList):
+    async def analyze_batch_strem(self, audio_files: AudioFileList, run_behavioral: bool = False):
         async def generate_results():
             """Async generator that yields results as files complete processing"""
             logger.info(f"Starting streaming batch processing for {len(audio_files.files)} files")
@@ -195,6 +221,7 @@ class VoiceAgentEvaluatorService:
             
             for i, audio_file in enumerate(audio_files.files, 1):
                 path = audio_file.path
+                conversation_type = getattr(audio_file, 'conversation_type', None)
                 logger.info(f"[{i}/{len(audio_files.files)}] Processing: {path}")
                 
                 try:
@@ -270,7 +297,7 @@ class VoiceAgentEvaluatorService:
                             user_ai_overlap_count += 1
                     
                     combined_evaluation = None
-                    if self.llm_evaluator is not None:
+                    if run_behavioral and self._ensure_llm_evaluator():
                         try:
                             logger.info(f"Starting combined LLM + behavioral evaluation for {filename}")
                             loop = asyncio.get_event_loop()
@@ -279,6 +306,19 @@ class VoiceAgentEvaluatorService:
                         except Exception as e:
                             logger.error(f"Combined evaluation failed for {path}: {e}")
                             logger.error(f"Full traceback: {traceback.format_exc()}")
+
+                    # Scripted initialization analysis
+                    initial_latency_points = {}
+                    resolved_type = conversation_type if conversation_type else None
+                    try:
+                        initial_latency_points, resolved_type = analyze_scripted_initialization(
+                            metrics.get("combined_speaker_turns", []),
+                            metrics.get("agent_vad_segments", []),
+                            metrics.get("processed_path", local_file_path),
+                            conversation_type,
+                        )
+                    except Exception as e:
+                        logger.warning(f"Scripted analysis failed for {filename}: {e}")
 
                     # Create successful response
                     result = MetricsResponse(
@@ -302,6 +342,8 @@ class VoiceAgentEvaluatorService:
                         echoInterrupt=metrics.get("echoInterrupt", False),
                         hasNoise=metrics.get("hasNoise", False),
                         noiseInterrupt=metrics.get("noiseInterrupt", False),
+                        conversation_type=resolved_type,
+                        initial_latency_points=initial_latency_points,
                         languageSwitch=combined_evaluation.languageSwitch if combined_evaluation else None,
                         sentiment=combined_evaluation.sentiment if combined_evaluation else None,
                         # Add behavioral analysis results from combined evaluation

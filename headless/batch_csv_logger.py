@@ -10,6 +10,7 @@ import os
 import glob
 import time
 import json
+import argparse
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any
@@ -17,7 +18,7 @@ from typing import List, Dict, Any
 # Configuration
 API_BASE = "http://localhost:8030"
 # TODO: Update this to your actual audio files directory
-AUDIO_FILES_DIR = r"C:\Users\ArdAlp\Downloads\high_lat"
+AUDIO_FILES_DIR = r"C:\Users\Plyra\Downloads\high_lat"
 # TODO: Update this to your actual input CSV file path
 INPUT_CSV = "test_input.csv"
 OUTPUT_DIR = "csv_outputs"
@@ -46,6 +47,8 @@ CSV_HEADERS = [
     'echoInterrupt',
     'hasNoise',
     'noiseInterrupt',
+    'conversation_type',
+    'initial_latency_points',
     'languageSwitch',
     'sentiment',
     'negativeExperience',
@@ -74,7 +77,12 @@ def get_audio_data_from_csv(csv_path: str, audio_dir: str) -> List[Dict[str, str
             if filename:
                 file_path = os.path.join(audio_dir, filename)
                 if os.path.exists(file_path):
-                    audio_data.append({"path": file_path})
+                    item = {"path": file_path}
+                    # Optional: pass conversation_type from CSV if present
+                    conv = row.get('conversation_type')
+                    if conv:
+                        item["conversation_type"] = conv
+                    audio_data.append(item)
                 else:
                     print(f"⚠️  Audio file not found: {file_path}")
             else:
@@ -88,7 +96,7 @@ def get_audio_data_from_csv(csv_path: str, audio_dir: str) -> List[Dict[str, str
         
     return audio_data
 
-def process_batch(audio_data: List[Dict[str, str]]) -> List[Dict[str, Any]]:
+def process_batch(audio_data: List[Dict[str, str]], run_behavioral: bool = False) -> List[Dict[str, Any]]:
     """Process files through the batch API endpoint"""
     payload = {"files": audio_data}
     
@@ -96,8 +104,10 @@ def process_batch(audio_data: List[Dict[str, str]]) -> List[Dict[str, Any]]:
         print(f"📤 Processing {len(audio_data)} files through batch endpoint...")
         start_time = time.time()
         
+        params = {"run_behavioral": str(run_behavioral).lower()} if run_behavioral else None
         response = requests.post(
             f"{API_BASE}/batch",
+            params=params,
             json=payload,
             headers={"Content-Type": "application/json"},
             timeout=3600  # 1 hour timeout
@@ -282,6 +292,11 @@ def main():
     print("🚀 Batch Audio Processing CSV Logger")
     print("=" * 50)
     
+    # Args
+    parser = argparse.ArgumentParser(description="Batch audio metrics logger")
+    parser.add_argument("--run-behavioral", action="store_true", help="Enable LLM-based behavioral metrics")
+    args = parser.parse_args()
+
     # Setup
     ensure_output_directory()
     csv_output_path = os.path.join(OUTPUT_DIR, CSV_FILENAME)
@@ -296,22 +311,32 @@ def main():
     
     # Process files
     print(f"\n🔄 Processing {len(audio_data)} files...")
-    results = process_batch(audio_data)
-    
+
+    # 1) Run baseline (audio metrics + scripted init)
+    print("\n⚙️ Behavioral metrics: DISABLED")
+    results = process_batch(audio_data, run_behavioral=False)
     if results:
-        # Save to CSV
         save_to_csv(results, csv_output_path)
-        
-        # Print summary
         print_summary(results)
-        
-        # Print detailed results table
         print_results_table(results)
-        
-        print(f"\n✅ Processing complete!")
-        print(f"📄 CSV file: {os.path.abspath(csv_output_path)}")
+        print(f"\n✅ Baseline complete")
+        print(f"📄 Metrics CSV: {os.path.abspath(csv_output_path)}")
     else:
-        print("❌ No results to save")
+        print("❌ No baseline results to save")
+
+    # 2) Run behavioral-enabled pass for LLM metrics
+    print("\n⚙️ Behavioral metrics: ENABLED")
+    results_llm = process_batch(audio_data, run_behavioral=True)
+    if results_llm:
+        ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+        llm_csv_path = os.path.join(OUTPUT_DIR, f"llm_analysis_{ts}.csv")
+        save_to_csv(results_llm, llm_csv_path)
+        print_summary(results_llm)
+        print_results_table(results_llm)
+        print(f"\n✅ Behavioral pass complete")
+        print(f"📄 LLM CSV: {os.path.abspath(llm_csv_path)}")
+    else:
+        print("❌ No behavioral results to save")
 
 if __name__ == "__main__":
     main()

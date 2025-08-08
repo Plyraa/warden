@@ -7,6 +7,9 @@ from pydantic import BaseModel, Field
 
 class AudioFile(BaseModel):
     path: str
+    # Optional conversation type hint for scripted latency analysis
+    # e.g., "public_phone", "private_phone", "web", "presentation", "other", or any custom string
+    conversation_type: Optional[str] = None
 
 class AudioFileList(BaseModel):
     """Model for list of audio files to analyze in batch mode"""
@@ -59,6 +62,9 @@ class MetricsResponse(BaseModel):
     echoInterrupt: bool = False
     hasNoise: bool = False
     noiseInterrupt: bool = False
+    # Scripted initialization latency metrics
+    conversation_type: Optional[str] = Field(None, description="Conversation type as provided (e.g., public_phone, private_phone, web, presentation, other, or custom)")
+    initial_latency_points: Dict[str, float] = Field(default_factory=dict, description="Scripted initialization latencies in seconds by stage (e.g., attempt2, attempt1, verification, disclaimer, terminate, first_agent_message)")
     # LLM Evaluation Metrics
     languageSwitch: Optional[bool] = Field(None, description="Whether the agent switched languages.")
     sentiment: Optional[Literal["happy", "neutral", "angry", "disappointed"]] = Field(None, description="The user's sentiment.")

@@ -61,6 +61,11 @@ DTW_METRIC: str = "cosine"
 # Verbose: print per-template similarity scores for every checked segment
 PRINT_SIMILARITY_SCORES: bool = True
 
+# If a non-template verification segment duration exceeds this threshold, assume
+# it is concatenated with the first agent message and report first_agent_message
+# latency as 0 seconds.
+VERIFICATION_CONCAT_THRESHOLD_SECONDS: float = 7.5
+
 
 TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "audio_files")
 
@@ -339,22 +344,41 @@ def analyze_scripted_initialization(
                         else:
                             # Treat as verification (no template). Latency is from anchor to this start
                             init["verification"] = max(0.0, after_a1["start"] - anchor_time)
-                            # After verification, next latency is to first agent message
+                            # After verification, check concatenation before computing next latency
                             ver_end = after_a1["end"]
-                            anchor_time = ver_end
-                            # Next agent message after verification
-                            after_ver = _next_agent_segment_after(merged_agent_segments, ver_end + 1e-6)
-                            if after_ver is not None:
-                                init["first_agent_message"] = max(0.0, after_ver["start"] - anchor_time)
+                            ver_dur = max(0.0, ver_end - after_a1["start"])
+                            if ver_dur > VERIFICATION_CONCAT_THRESHOLD_SECONDS:
+                                init["first_agent_message"] = 0.0
+                                try:
+                                    print(f"[scripted] verification dur={ver_dur:.2f}s > {VERIFICATION_CONCAT_THRESHOLD_SECONDS}s => first_agent_message latency=0")
+                                except Exception:
+                                    pass
+                                anchor_time = ver_end
+                            else:
+                                anchor_time = ver_end
+                                # Next agent message after verification
+                                after_ver = _next_agent_segment_after(merged_agent_segments, ver_end + 1e-6)
+                                if after_ver is not None:
+                                    init["first_agent_message"] = max(0.0, after_ver["start"] - anchor_time)
                 else:
                     # Not attempt1; then treat this as verification (no template)
                     init["verification"] = max(0.0, after_a2["start"] - anchor_time)
                     ver_end = after_a2["end"]
-                    anchor_time = ver_end
-                    # Next agent message after verification
-                    after_ver = _next_agent_segment_after(merged_agent_segments, ver_end + 1e-6)
-                    if after_ver is not None:
-                        init["first_agent_message"] = max(0.0, after_ver["start"] - anchor_time)
+                    # Check if verification likely concatenated with first agent message
+                    ver_dur = max(0.0, ver_end - after_a2["start"])
+                    if ver_dur > VERIFICATION_CONCAT_THRESHOLD_SECONDS:
+                        init["first_agent_message"] = 0.0
+                        try:
+                            print(f"[scripted] verification dur={ver_dur:.2f}s > {VERIFICATION_CONCAT_THRESHOLD_SECONDS}s => first_agent_message latency=0")
+                        except Exception:
+                            pass
+                        anchor_time = ver_end
+                    else:
+                        anchor_time = ver_end
+                        # Next agent message after verification
+                        after_ver = _next_agent_segment_after(merged_agent_segments, ver_end + 1e-6)
+                        if after_ver is not None:
+                            init["first_agent_message"] = max(0.0, after_ver["start"] - anchor_time)
         else:
             # No attempt2 matched; if attempt1 matched, use it similarly
             if "attempt1" in by_label:
@@ -370,10 +394,19 @@ def analyze_scripted_initialization(
                     else:
                         init["verification"] = max(0.0, after_a1["start"] - anchor_time)
                         ver_end = after_a1["end"]
-                        anchor_time = ver_end
-                        after_ver = _next_agent_segment_after(merged_agent_segments, ver_end + 1e-6)
-                        if after_ver is not None:
-                            init["first_agent_message"] = max(0.0, after_ver["start"] - anchor_time)
+                        ver_dur = max(0.0, ver_end - after_a1["start"])
+                        if ver_dur > VERIFICATION_CONCAT_THRESHOLD_SECONDS:
+                            init["first_agent_message"] = 0.0
+                            try:
+                                print(f"[scripted] verification dur={ver_dur:.2f}s > {VERIFICATION_CONCAT_THRESHOLD_SECONDS}s => first_agent_message latency=0")
+                            except Exception:
+                                pass
+                            anchor_time = ver_end
+                        else:
+                            anchor_time = ver_end
+                            after_ver = _next_agent_segment_after(merged_agent_segments, ver_end + 1e-6)
+                            if after_ver is not None:
+                                init["first_agent_message"] = max(0.0, after_ver["start"] - anchor_time)
 
         # If redirect was matched but not first, compute its interval from current anchor
         if "redirect" in by_label and "disclaimer" not in init:
@@ -386,7 +419,14 @@ def analyze_scripted_initialization(
             ver = merged_agent_segments[0]
             init.clear()
             init["verification"] = max(0.0, ver["start"] - 0.0)
-            if len(merged_agent_segments) > 1:
+            ver_dur = max(0.0, ver["end"] - ver["start"])
+            if ver_dur > VERIFICATION_CONCAT_THRESHOLD_SECONDS:
+                init["first_agent_message"] = 0.0
+                try:
+                    print(f"[scripted] verification dur={ver_dur:.2f}s > {VERIFICATION_CONCAT_THRESHOLD_SECONDS}s => first_agent_message latency=0")
+                except Exception:
+                    pass
+            elif len(merged_agent_segments) > 1:
                 fam = merged_agent_segments[1]
                 init["first_agent_message"] = max(0.0, fam["start"] - ver["end"])
 
@@ -395,7 +435,14 @@ def analyze_scripted_initialization(
             ver = merged_agent_segments[0]
             init.clear()
             init["verification"] = max(0.0, ver["start"] - 0.0)
-            if len(merged_agent_segments) > 1:
+            ver_dur = max(0.0, ver["end"] - ver["start"])
+            if ver_dur > VERIFICATION_CONCAT_THRESHOLD_SECONDS:
+                init["first_agent_message"] = 0.0
+                try:
+                    print(f"[scripted] verification dur={ver_dur:.2f}s > {VERIFICATION_CONCAT_THRESHOLD_SECONDS}s => first_agent_message latency=0")
+                except Exception:
+                    pass
+            elif len(merged_agent_segments) > 1:
                 fam = merged_agent_segments[1]
                 init["first_agent_message"] = max(0.0, fam["start"] - ver["end"])
 
@@ -420,10 +467,19 @@ def analyze_scripted_initialization(
         first = _first_agent_segment(merged_agent_segments)
         if first:
             init["verification"] = max(0.0, first["start"] - 0.0)
-            # Next agent after verification is the first agent message
-            after_ver = _next_agent_segment_after(merged_agent_segments, first["end"] + 1e-6)
-            if after_ver is not None:
-                init["first_agent_message"] = max(0.0, after_ver["start"] - first["end"])
+            # If verification is long, treat as concatenated with first agent message
+            ver_dur = max(0.0, first["end"] - first["start"])
+            if ver_dur > VERIFICATION_CONCAT_THRESHOLD_SECONDS:
+                init["first_agent_message"] = 0.0
+                try:
+                    print(f"[scripted] verification dur={ver_dur:.2f}s > {VERIFICATION_CONCAT_THRESHOLD_SECONDS}s => first_agent_message latency=0")
+                except Exception:
+                    pass
+            else:
+                # Next agent after verification is the first agent message
+                after_ver = _next_agent_segment_after(merged_agent_segments, first["end"] + 1e-6)
+                if after_ver is not None:
+                    init["first_agent_message"] = max(0.0, after_ver["start"] - first["end"])
         return init, custom
 
     # web-audio, presentation, other/custom: only first agent message latency

@@ -49,86 +49,87 @@ class AudioProcessor:
             return self.vad_model, self.get_speech_timestamps
 
     def load_and_process_audio(self, input_path):
-        """Load audio file, apply noise reduction at 48k, then downsample to 16k for VAD"""
+        """Replicate main NoiseRed-enabled : upsample+save at 48k, denoise L channel, downsample to 16k for VAD (in-memory)."""
         if not os.path.exists(input_path):
             raise FileNotFoundError(f"Input file not found: {input_path}")
 
         base_filename = os.path.basename(input_path)
-        output_filename = (
-            os.path.splitext(base_filename)[0] + "_processed" + os.path.splitext(base_filename)[1]
-        )
-        output_path = os.path.join(self.audio_dir, output_filename)
+        name, ext = os.path.splitext(base_filename)
+        upsampled_filename = f"{name}_upsampled{ext}"
+        upsampled_path = os.path.join(self.audio_dir, upsampled_filename)
 
-        if os.path.exists(output_path):
-            print(f"Removing existing processed file for fresh processing: {output_path}")
-            os.remove(output_path)
+        # Remove existing upsampled file for fresh processing
+        if os.path.exists(upsampled_path):
+            print(f"Removing existing upsampled file for fresh processing: {upsampled_path}")
+            os.remove(upsampled_path)
 
-        file_extension = os.path.splitext(input_path)[1].lower()
-        
+        file_extension = ext.lower()
+
         try:
-            # Step 1: Load original audio file
+            noise_reduction_sr = 48000
+
+            # Step 1: Upsample original to 48kHz and save (match main pipeline persistence)
             if file_extension == ".mp3":
-                print(f"Loading MP3 file: {input_path}")
+                print(f"Loading MP3 file for upsampling: {input_path}")
                 audio_segment = AudioSegment.from_mp3(input_path)
-                
-                # Ensure stereo
                 if audio_segment.channels == 1:
                     print("Converting mono to stereo")
                     audio_segment = audio_segment.set_channels(2)
+                if audio_segment.frame_rate != noise_reduction_sr:
+                    print(f"Resampling from {audio_segment.frame_rate}Hz to {noise_reduction_sr}Hz")
+                    audio_segment = audio_segment.set_frame_rate(noise_reduction_sr)
+                print(f"Exporting upsampled file to: {upsampled_path}")
+                audio_segment.export(upsampled_path, format="mp3")
 
-                # Get original sample rate and convert to numpy
-                original_sr = audio_segment.frame_rate
-                audio_data = np.array(audio_segment.get_array_of_samples())
-                if audio_segment.channels == 2:
-                    audio_data = audio_data.reshape((-1, 2)).T
-                else:
-                    audio_data = np.array([audio_data, audio_data])
-                audio = audio_data.astype(np.float32) / 32768.0  # Convert to float
+                # Load the upsampled file as numpy for denoising
+                audio_48k, sr_48k = librosa.load(upsampled_path, sr=noise_reduction_sr, mono=False)
+                if len(audio_48k.shape) == 1:
+                    audio_48k = np.array([audio_48k, audio_48k])
+                elif audio_48k.shape[0] != 2 and audio_48k.shape[1] == 2:
+                    audio_48k = audio_48k.T
 
             elif file_extension == ".wav":
-                print(f"Loading WAV file: {input_path}")
-                audio, original_sr = librosa.load(input_path, sr=None, mono=False)
-                
-                # If audio is mono, duplicate to create stereo
-                if len(audio.shape) == 1:
-                    audio = np.array([audio, audio])
-                elif audio.shape[0] != 2 and audio.shape[1] == 2:
-                    audio = audio.T
+                print(f"Loading WAV file for upsampling: {input_path}")
+                audio_raw, sr_in = librosa.load(input_path, sr=None, mono=False)
+                if len(audio_raw.shape) == 1:
+                    audio_raw = np.array([audio_raw, audio_raw])
+                elif audio_raw.shape[0] != 2 and audio_raw.shape[1] == 2:
+                    audio_raw = audio_raw.T
+
+                if sr_in != noise_reduction_sr:
+                    print(f"Resampling from {sr_in}Hz to {noise_reduction_sr}Hz for noise reduction")
+                    left = librosa.resample(audio_raw[0], orig_sr=sr_in, target_sr=noise_reduction_sr)
+                    right = librosa.resample(audio_raw[1], orig_sr=sr_in, target_sr=noise_reduction_sr)
+                    audio_48k = np.array([left, right])
+                else:
+                    audio_48k = audio_raw.copy()
+
+                print(f"Saving upsampled WAV to: {upsampled_path}")
+                sf.write(upsampled_path, audio_48k.T, noise_reduction_sr)
+                sr_48k = noise_reduction_sr
             else:
                 raise ValueError(f"Unsupported file format: {file_extension}")
 
-            print(f"Original audio loaded: {original_sr}Hz, shape: {audio.shape}")
+            print(f"Upsampled audio ready at {upsampled_path} with shape {audio_48k.shape}")
 
-            # Step 2: Resample to 48kHz for noise reduction (DeepFilterNet requirement)
-            noise_reduction_sr = 48000
-            if original_sr != noise_reduction_sr:
-                print(f"Resampling from {original_sr}Hz to {noise_reduction_sr}Hz for noise reduction")
-                audio_48k = librosa.resample(audio, orig_sr=original_sr, target_sr=noise_reduction_sr)
-            else:
-                audio_48k = audio.copy()
-
-            # Step 3: Apply noise reduction at 48kHz
+            # Step 2: Apply noise reduction at 48kHz (left/user channel only)
             print("Applying noise reduction to user channel at 48kHz...")
             try:
-                audio_denoised = apply_noise_reduction(audio_48k, noise_reduction_sr)
+                audio_48k_denoised = apply_noise_reduction(audio_48k, noise_reduction_sr)
                 print("Noise reduction completed successfully")
             except Exception as e:
-                print(f"Warning: Noise reduction failed, continuing with original audio: {e}")
-                audio_denoised = audio_48k
+                print(f"Warning: Noise reduction failed, continuing with upsampled audio: {e}")
+                audio_48k_denoised = audio_48k
 
-            # Step 4: Downsample to 16kHz for VAD processing
+            # Step 3: Downsample to 16kHz for VAD (in-memory only)
             vad_sr = 16000
-            if noise_reduction_sr != vad_sr:
-                print(f"Downsampling from {noise_reduction_sr}Hz to {vad_sr}Hz for VAD processing")
-                audio_final = librosa.resample(audio_denoised, orig_sr=noise_reduction_sr, target_sr=vad_sr)
-            else:
-                audio_final = audio_denoised
+            print(f"Downsampling denoised audio from {noise_reduction_sr}Hz to {vad_sr}Hz for VAD")
+            left_ds = librosa.resample(audio_48k_denoised[0], orig_sr=noise_reduction_sr, target_sr=vad_sr)
+            right_ds = librosa.resample(audio_48k_denoised[1], orig_sr=noise_reduction_sr, target_sr=vad_sr)
+            vad_audio = np.array([left_ds, right_ds])
 
-            # Step 5: Save the final processed audio
-            print(f"Saving processed audio to: {output_path}")
-            sf.write(output_path, audio_final.T, vad_sr)
-
-            return audio_final, vad_sr, output_path
+            # Return VAD-ready audio, and persist path to 48k upsampled file (for echo/noise detection)
+            return vad_audio, vad_sr, upsampled_path, audio_48k_denoised, noise_reduction_sr
 
         except Exception as e:
             print(f"ERROR in audio processing: {str(e)}")
@@ -644,16 +645,16 @@ class AudioProcessor:
         try:
             print(f"Processing file: {filename}")
             
-            # Load, apply noise reduction at 48k, and downsample to 16k for VAD
-            audio, sr, output_path = self.load_and_process_audio(filename)
+            # Load, upsample+save at 48k, apply NR (L channel), then downsample to 16k for VAD
+            vad_audio, vad_sr, upsampled_path, audio_48k, sr_48k = self.load_and_process_audio(filename)
 
             # Process user channel with Silero VAD
             print("Processing user channel with Silero VAD...")
-            raw_user_vad_segments = self.detect_speech_silero_vad(audio[0], sr)
+            raw_user_vad_segments = self.detect_speech_silero_vad(vad_audio[0], vad_sr)
 
             # Process agent channel with Silero VAD
             print("Processing agent channel with Silero VAD...")
-            raw_agent_vad_segments = self.detect_speech_silero_vad(audio[1], sr)
+            raw_agent_vad_segments = self.detect_speech_silero_vad(vad_audio[1], vad_sr)
             
             # Create detailed timeline with proper overlap handling
             print("Creating detailed timeline with overlap handling...")
@@ -684,11 +685,11 @@ class AudioProcessor:
 
             # Detect echo
             print("Running echo detection...")
-            echo_result = detect_echo(output_path, apply_noise_reduction=False) # Noise reduction already applied
+            echo_result = detect_echo(upsampled_path, apply_noise_reduction=False)  # Use 48k upsampled file
 
             # Detect noise
             print("Running noise detection...")
-            noise_result = detect_noise(output_path)
+            noise_result = detect_noise(upsampled_path)
 
             # Calculate overlap detection
             overlap_data = self.detect_overlaps_from_vad_segments(
@@ -702,7 +703,7 @@ class AudioProcessor:
             metrics = {
                 "filename": os.path.basename(filename),
                 "original_path": filename,
-                "processed_path": output_path,
+                "processed_path": upsampled_path,  # Align with main NR-enabled path
                 "combined_speaker_turns": detailed_timeline,  # Use the detailed timeline
                 "user_vad_segments": user_speech_turns,
                 "agent_vad_segments": agent_speech_turns,
@@ -712,8 +713,9 @@ class AudioProcessor:
                 "ai_interrupting_user": overlap_data["has_ai_interrupting_user"],
                 "user_interrupting_ai": overlap_data["has_user_interrupting_ai"],
                 "talk_ratio": self.calculate_talk_ratio(user_speech_turns, agent_speech_turns),
-                "average_pitch": self.calculate_average_pitch(audio, sr),
-                "words_per_minute": self.calculate_words_per_minute(audio, sr, agent_speech_turns),
+                # Use 48k audio for better pitch/WPM parity with main NR-enabled pipeline
+                "average_pitch": self.calculate_average_pitch(audio_48k, sr_48k),
+                "words_per_minute": self.calculate_words_per_minute(audio_48k, sr_48k, agent_speech_turns),
                 "hasEcho": echo_result.get("hasEcho", False),
                 "echoInterrupt": echo_result.get("echoInterrupt", False),
                 "hasNoise": noise_result.get("hasNoise", False),

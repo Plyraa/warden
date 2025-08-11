@@ -14,10 +14,8 @@ urllib3==2.2.1
 pydantic==2.11.7
 loguru==0.5.3
 singleton-decorator==1.0.0
-openai
-elevenlabs
 python-dotenv
-pyyaml
-denoiser
+deepfilternet
 httpx
 google-genai
+pyyaml

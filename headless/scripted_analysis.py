@@ -238,20 +238,9 @@ def analyze_scripted_initialization(
     """
     raw_type = (conversation_type or "").strip()
     logic_key = raw_type.lower()
-    # Map legacy/variants to new canonical keys
-    mapping = {
-        "public_phone": "shared-phone",
-        "public-phone": "shared-phone",
-        "shared_phone": "shared-phone",
-        "private_phone": "private-phone",
-        "private-phone": "private-phone",
-        "web": "web-audio",
-        "web-audio": "web-audio",
-        "presentation": "presentation",
-    }
-    resolved_logic = mapping.get(logic_key, logic_key if logic_key in {"shared-phone", "private-phone", "web-audio", "presentation"} else "web-audio")
-    # Preserve original string when present, else use resolved_logic
-    custom = raw_type if raw_type else resolved_logic
+    # Only accept these canonical types; default to 'web-audio' otherwise
+    allowed_types = {"shared-phone", "private-phone", "web-audio", "presentation"}
+    resolved_logic = logic_key if logic_key in allowed_types else "web-audio"
 
     # Normalize and merge agent segments
     agent_segments = [
@@ -263,13 +252,13 @@ def analyze_scripted_initialization(
     merged_agent_segments = _merge_segments(agent_segments, max_gap=1.5)
 
     try:
-        print(f"[scripted] type={custom} (logic={resolved_logic}) merged_agent_segments={len(merged_agent_segments)}")
+        print(f"[scripted] type={resolved_logic} merged_agent_segments={len(merged_agent_segments)}")
     except Exception:
         pass
 
     # If nothing to analyze, return empty
     if not merged_agent_segments:
-        return {}, custom
+        return {}, resolved_logic
 
     init: Dict[str, float] = {}
 
@@ -309,7 +298,7 @@ def analyze_scripted_initialization(
             # Compute terminate latency from current anchor
             tseg = by_label["terminate"]
             init["terminate"] = max(0.0, tseg["start"] - anchor_time)
-            return init, custom
+            return init, resolved_logic
 
         first_agent = merged_agent_segments[0]
         # Global simplification: if attempt2 is anywhere, first agent segment is attempt2
@@ -459,7 +448,7 @@ def analyze_scripted_initialization(
                     if next_after_ver is not None:
                         init["first_agent_message"] = max(0.0, next_after_ver["start"] - after_a1["end"])
 
-        return init, custom
+    return init, resolved_logic
 
     if resolved_logic == "private-phone":
         # Two latencies: from t=0 to verification, then to first agent message
@@ -480,10 +469,10 @@ def analyze_scripted_initialization(
                 after_ver = _next_agent_segment_after(merged_agent_segments, first["end"] + 1e-6)
                 if after_ver is not None:
                     init["first_agent_message"] = max(0.0, after_ver["start"] - first["end"])
-        return init, custom
+    return init, resolved_logic
 
     # web-audio, presentation, other/custom: only first agent message latency
     first = _first_agent_segment(merged_agent_segments)
     if first:
         init["first_agent_message"] = max(0.0, first["start"] - 0.0)
-    return init, custom
+    return init, resolved_logic

@@ -324,19 +324,5 @@ def main():
     else:
         print("❌ No baseline results to save")
 
-    # 2) Run behavioral-enabled pass for LLM metrics
-    print("\n⚙️ Behavioral metrics: ENABLED")
-    results_llm = process_batch(audio_data, run_behavioral=True)
-    if results_llm:
-        ts = datetime.now().strftime('%Y%m%d_%H%M%S')
-        llm_csv_path = os.path.join(OUTPUT_DIR, f"llm_analysis_{ts}.csv")
-        save_to_csv(results_llm, llm_csv_path)
-        print_summary(results_llm)
-        print_results_table(results_llm)
-        print(f"\n✅ Behavioral pass complete")
-        print(f"📄 LLM CSV: {os.path.abspath(llm_csv_path)}")
-    else:
-        print("❌ No behavioral results to save")
-
 if __name__ == "__main__":
     main()

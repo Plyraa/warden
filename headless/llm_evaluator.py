@@ -9,7 +9,7 @@ import base64
 import mimetypes
 import httpx
 from pydantic import BaseModel, Field
-from typing import List, Literal, Dict, Any, Optional
+from typing import List, Literal, Dict, Any, Optional, Tuple
 from dotenv import load_dotenv
 from schemas import BehavioralAnalysisResult
 
@@ -77,7 +77,7 @@ class LlmEvaluator:
         ext = os.path.splitext(file_path)[1].lower()
         return audio_mime_types.get(ext, 'audio/mp3')  # Default to mp3
 
-    def _encode_audio_file(self, file_path: str) -> tuple[str, str]:
+    def _encode_audio_file(self, file_path: str) -> Tuple[str, str]:
         """Read and base64 encode an audio file. Returns (base64_data, mime_type)"""
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"Audio file not found: {file_path}")
@@ -387,7 +387,7 @@ class LlmEvaluator:
         print(f"===== Basic LLM Evaluation for {os.path.basename(file_path)} Complete =====\n")
         return basic_result
 
-    def analyze_batch_semantic(self, audio_files: list[str], language: str = "English") -> Dict[str, Optional[CombinedEvaluationResult]]:
+    def analyze_batch_semantic(self, audio_files: List[str], language: str = "English") -> Dict[str, Optional[CombinedEvaluationResult]]:
         """
         Analyze multiple audio files for complete semantic analysis using Gemini
         

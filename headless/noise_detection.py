@@ -9,7 +9,7 @@ SAMPLE_RATE = 16000
 NOISE_TEST_DIR = "noise_test"
 
 # SNR calculation constants
-SNR_THRESHOLD = 40  # SNR value in dB below which the audio is considered noisy
+SNR_THRESHOLD = 35  # SNR value in dB below which the audio is considered noisy, you may try 25-50 dB
 
 # VAD constants
 VAD_FRAME_MS = 30

@@ -81,7 +81,7 @@ class AudioProcessor:
                 print(f"Exporting upsampled file to: {upsampled_path}")
                 audio_segment.export(upsampled_path, format="mp3")
 
-                # Load the upsampled file as numpy for denoising
+                # Load the upsampled file as numpy for processing
                 audio_48k, sr_48k = librosa.load(upsampled_path, sr=noise_reduction_sr, mono=False)
                 if len(audio_48k.shape) == 1:
                     audio_48k = np.array([audio_48k, audio_48k])
@@ -112,7 +112,16 @@ class AudioProcessor:
 
             print(f"Upsampled audio ready at {upsampled_path} with shape {audio_48k.shape}")
 
-            # Step 2: Apply noise reduction at 48kHz (left/user channel only)
+            # Step 2: Run echo detection on clean upsampled audio BEFORE noise reduction
+            print("Running echo detection on clean upsampled audio...")
+            try:
+                echo_result = detect_echo(upsampled_path, apply_noise_reduction=False)
+                print(f"Echo detection completed: hasEcho={echo_result.get('hasEcho', False)}, echoInterrupt={echo_result.get('echoInterrupt', False)}")
+            except Exception as e:
+                print(f"Warning: Echo detection failed: {e}")
+                echo_result = {"hasEcho": False, "echoInterrupt": False, "error": str(e)}
+
+            # Step 3: Apply noise reduction at 48kHz (left/user channel only)
             print("Applying noise reduction to user channel at 48kHz...")
             try:
                 audio_48k_denoised = apply_noise_reduction(audio_48k, noise_reduction_sr)
@@ -121,15 +130,15 @@ class AudioProcessor:
                 print(f"Warning: Noise reduction failed, continuing with upsampled audio: {e}")
                 audio_48k_denoised = audio_48k
 
-            # Step 3: Downsample to 16kHz for VAD (in-memory only)
+            # Step 4: Downsample to 16kHz for VAD (in-memory only)
             vad_sr = 16000
             print(f"Downsampling denoised audio from {noise_reduction_sr}Hz to {vad_sr}Hz for VAD")
             left_ds = librosa.resample(audio_48k_denoised[0], orig_sr=noise_reduction_sr, target_sr=vad_sr)
             right_ds = librosa.resample(audio_48k_denoised[1], orig_sr=noise_reduction_sr, target_sr=vad_sr)
             vad_audio = np.array([left_ds, right_ds])
 
-            # Return VAD-ready audio, and persist path to 48k upsampled file (for echo/noise detection)
-            return vad_audio, vad_sr, upsampled_path, audio_48k_denoised, noise_reduction_sr
+            # Return VAD-ready audio, upsampled file path, denoised audio, and echo results
+            return vad_audio, vad_sr, upsampled_path, audio_48k_denoised, noise_reduction_sr, echo_result
 
         except Exception as e:
             print(f"ERROR in audio processing: {str(e)}")
@@ -645,8 +654,8 @@ class AudioProcessor:
         try:
             print(f"Processing file: {filename}")
             
-            # Load, upsample+save at 48k, apply NR (L channel), then downsample to 16k for VAD
-            vad_audio, vad_sr, upsampled_path, audio_48k, sr_48k = self.load_and_process_audio(filename)
+            # Load, upsample+save at 48k, run echo detection, apply NR (L channel), then downsample to 16k for VAD
+            vad_audio, vad_sr, upsampled_path, audio_48k, sr_48k, echo_result = self.load_and_process_audio(filename)
 
             # Process user channel with Silero VAD
             print("Processing user channel with Silero VAD...")
@@ -683,9 +692,8 @@ class AudioProcessor:
             # Calculate VAD-based latency metrics using the detailed timeline
             vad_latency_metrics, vad_latency_details = self.calculate_latency_from_timeline(detailed_timeline)
 
-            # Detect echo
-            print("Running echo detection...")
-            echo_result = detect_echo(upsampled_path, apply_noise_reduction=False)  # Use 48k upsampled file
+            # Echo was already detected during load_and_process_audio - use those results
+            print("Using echo detection results from preprocessing step...")
 
             # Detect noise
             print("Running noise detection...")

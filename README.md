@@ -24,37 +24,22 @@ python warden.py --api-only
 python warden.py --web-only
 ```
 
-## Core Features
-
-- **Real-time Streaming**: Process multiple files with live results via `/batch-stream`
+## Features
 - **Batch Processing**: Analyze multiple files at once via `/batch`
 - **Audio Metrics**: Latency, overlap detection, talk ratio, pitch, WPM, noise and echo detection
 - **Transcription**: Speech-to-text with overlap analysis (ElevenLabs API)
-- **LLM Evaluation** (NEW): AI agent persona adherence, language consistency, and user sentiment analysis
-- **Noise Reduction** (NEW): Optional Facebook Denoiser for cleaner user audio
+- **LLM Evaluation**: AI agent persona adherence, language consistency, and user sentiment analysis
+- **Noise Reduction**: Optional Facebook Denoiser for cleaner user audio
 - **Web UI**: Interactive visualization and file management with agent ID input
-- **URL Support**: Process remote audio files automatically
 
-## NEW Features 🚀
-
-### LLM-Powered Agent Evaluation
+### LLM-Powered Features
 - **Persona Adherence**: 1-5 scale rating of how well the agent maintains its defined character
 - **Language Switch Detection**: Identifies if the agent switched languages unexpectedly  
 - **User Sentiment Analysis**: Categorizes user emotion as happy/neutral/angry/disappointed
-- **Agent Properties Integration**: Fetches agent configuration from JotForm API
-
-### Noise Reduction
-- **DeepFilterNet**: Modern neural network noise reduction for user audio channel
-- **UI Toggle**: Enable/disable noise reduction in the web interface
-- **Channel-Specific**: Only applies to user channel, preserving agent audio quality
-- **Resource Efficient**: 200-400MB RAM usage vs 8GB+ with Facebook Denoiser
-- **Sample Rate Optimized**: Smart processing flow that only upsamples to 48kHz when noise reduction is needed
-  - **Without noise reduction**: `input file → 16kHz (VAD)` - Direct downsampling for faster processing
-  - **With noise reduction**: `input file → 48kHz (noise suppression) → 16kHz (VAD)` - Full pipeline when needed
 
 ## API Endpoints
 
-### 🚀 Streaming Batch Processing (NEW)
+### Streaming Batch Processing (NEW)
 **`POST /batch-stream`** - Get results as files complete processing
 
 ```bash
@@ -189,7 +174,7 @@ python warden.py [options]
 ┌─────────────────┐    ┌─────────────────┐
 │   FastAPI       │    │   Flask Web UI  │
 │   (Port 8000)   │    │   (Port 5000)   │
-│                 │    │   via Waitress  │
+│                 │    │                 │
 │ • /batch        │    │ • Visualization │
 │ • /batch-stream │    │ • File Upload   │
 │ • /health       │    │ • Interactive   │

@@ -39,7 +39,7 @@ python warden.py --web-only
 
 ## API Endpoints
 
-### Streaming Batch Processing (NEW)
+### Streaming Batch Processing
 **`POST /batch-stream`** - Get results as files complete processing
 
 ```bash

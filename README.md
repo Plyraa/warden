@@ -1,6 +1,8 @@
+
 # Warden - AI Agent Call Audio Analysis
 
 A comprehensive audio analysis system for evaluating AI agent call quality with real-time streaming capabilities and advanced LLM-powered evaluation features.
+![turn-taking latency](https://raw.githubusercontent.com/Plyraa/warden/main/turn-taking_latency.jpg)
 
 ## Quick Start
 
@@ -36,6 +38,8 @@ python warden.py --web-only
 - **Persona Adherence**: 1-5 scale rating of how well the agent maintains its defined character
 - **Language Switch Detection**: Identifies if the agent switched languages unexpectedly  
 - **User Sentiment Analysis**: Categorizes user emotion as happy/neutral/angry/disappointed
+
+![speech analysis](https://raw.githubusercontent.com/Plyraa/warden/main/speech_analysis.jpg)
 
 ## API Endpoints
 
